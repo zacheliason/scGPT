@@ -1,28 +1,187 @@
-import os
 import math
-from typing import Mapping, Optional, Tuple, Any, Union
+from typing import Any, Mapping, Optional, Union
 
 import torch
-from torch import nn, Tensor
-import torch.distributed as dist
 import torch.nn.functional as F
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch import Tensor, nn
 from torch.distributions import Bernoulli
-from torch.utils.data import dataset
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch_geometric.nn import SGConv
 from tqdm import trange
 
-from .model import (
-    ExprDecoder,
-    MVCDecoder,
-    ContinuousValueEncoder,
-    FastTransformerEncoderWrapper,
-    FlashTransformerEncoderLayer,
+from .. import logger
+from ..gears_utils import (
+    GeneSimNetwork,
+    get_similarity_network,
 )
 from ..utils import map_raw_id_to_vocab_id
-from .. import logger
+from .model import (
+    ContinuousValueEncoder,
+    ExprDecoder,
+    FastTransformerEncoderWrapper,
+    FlashTransformerEncoderLayer,
+    MVCDecoder,
+)
+
+
+class MLP(torch.nn.Module):
+    def __init__(self, sizes, batch_norm=True, last_layer_act="linear"):
+        """
+        Multi-layer perceptron
+        :param sizes: list of sizes of the layers
+        :param batch_norm: whether to use batch normalization
+        :param last_layer_act: activation function of the last layer
+
+        """
+        super(MLP, self).__init__()
+        layers = []
+        for s in range(len(sizes) - 1):
+            layers = layers + [
+                torch.nn.Linear(sizes[s], sizes[s + 1]),
+                torch.nn.BatchNorm1d(sizes[s + 1])
+                if batch_norm and s < len(sizes) - 1
+                else None,
+                torch.nn.ReLU(),
+            ]
+
+        layers = [l for l in layers if l is not None][:-1]
+        self.activation = last_layer_act
+        self.network = torch.nn.Sequential(*layers)
+        self.relu = torch.nn.ReLU()
+
+    def forward(self, x):
+        return self.network(x)
 
 
 class TransformerGenerator(nn.Module):
+    def model_initialize(
+        self,
+        hidden_size=64,
+        num_go_gnn_layers=1,
+        num_gene_gnn_layers=1,
+        decoder_hidden_size=16,
+        num_similar_genes_go_graph=20,
+        num_similar_genes_co_express_graph=20,
+        coexpress_threshold=0.4,
+        uncertainty=False,
+        uncertainty_reg=1,
+        direction_lambda=1e-1,
+        G_go=None,
+        G_go_weight=None,
+        G_coexpress=None,
+        G_coexpress_weight=None,
+        no_perturb=False,
+        **kwargs,
+    ):
+        """
+        Initialize the model
+
+        Parameters
+        ----------
+        hidden_size: int
+            hidden dimension, default 64
+        num_go_gnn_layers: int
+            number of GNN layers for GO graph, default 1
+        num_gene_gnn_layers: int
+            number of GNN layers for co-expression gene graph, default 1
+        decoder_hidden_size: int
+            hidden dimension for gene-specific decoder, default 16
+        num_similar_genes_go_graph: int
+            number of maximum similar K genes in the GO graph, default 20
+        num_similar_genes_co_express_graph: int
+            number of maximum similar K genes in the co expression graph, default 20
+        coexpress_threshold: float
+            pearson correlation threshold when constructing coexpression graph, default 0.4
+        uncertainty: bool
+            whether or not to turn on uncertainty mode, default False
+        uncertainty_reg: float
+            regularization term to balance uncertainty loss and prediction loss, default 1
+        direction_lambda: float
+            regularization term to balance direction loss and prediction loss, default 1
+        G_go: scipy.sparse.csr_matrix
+            GO graph, default None
+        G_go_weight: scipy.sparse.csr_matrix
+            GO graph edge weights, default None
+        G_coexpress: scipy.sparse.csr_matrix
+            co-expression graph, default None
+        G_coexpress_weight: scipy.sparse.csr_matrix
+            co-expression graph edge weights, default None
+        no_perturb: bool
+            predict no perturbation condition, default False
+
+        Returns
+        -------
+        None
+        """
+
+        self.config = {
+            "hidden_size": hidden_size,
+            "num_go_gnn_layers": num_go_gnn_layers,
+            "num_gene_gnn_layers": num_gene_gnn_layers,
+            "decoder_hidden_size": decoder_hidden_size,
+            "num_similar_genes_go_graph": num_similar_genes_go_graph,
+            "num_similar_genes_co_express_graph": num_similar_genes_co_express_graph,
+            "coexpress_threshold": coexpress_threshold,
+            "uncertainty": uncertainty,
+            "uncertainty_reg": uncertainty_reg,
+            "direction_lambda": direction_lambda,
+            "G_go": G_go,
+            "G_go_weight": G_go_weight,
+            "G_coexpress": G_coexpress,
+            "G_coexpress_weight": G_coexpress_weight,
+            "device": self.device,
+            "num_genes": self.num_genes,
+            "num_perts": self.num_perts,
+            "no_perturb": no_perturb,
+        }
+
+        # if self.wandb:
+        #     self.wandb.config.update(self.config)
+
+        if self.config["G_coexpress"] is None:
+            ## calculating co expression similarity graph
+            edge_list = get_similarity_network(
+                network_type="co-express",
+                adata=self.adata,
+                threshold=coexpress_threshold,
+                k=num_similar_genes_co_express_graph,
+                data_path=self.data_path,
+                data_name=self.dataset_name,
+                split=self.split,
+                seed=self.seed,
+                train_gene_set_size=self.train_gene_set_size,
+                set2conditions=self.set2conditions,
+            )
+
+            sim_network = GeneSimNetwork(
+                edge_list, self.gene_list, node_map=self.node_map
+            )
+            self.G_coexpress = sim_network.edge_index
+            self.G_coexpress_weight = sim_network.edge_weight
+
+        if self.config["G_go"] is None:
+            ## calculating gene ontology similarity graph
+            edge_list = get_similarity_network(
+                network_type="go",
+                adata=self.adata,
+                threshold=coexpress_threshold,
+                k=num_similar_genes_go_graph,
+                pert_list=self.pert_list,
+                data_path=self.data_path,
+                data_name=self.dataset_name,
+                split=self.split,
+                seed=self.seed,
+                train_gene_set_size=self.train_gene_set_size,
+                set2conditions=self.set2conditions,
+                default_pert_graph=self.default_pert_graph,
+            )
+
+            sim_network = GeneSimNetwork(
+                edge_list, self.pert_list, node_map=self.node_map_pert
+            )
+            self.G_go = sim_network.edge_index
+            self.G_go_weight = sim_network.edge_weight
+
     def __init__(
         self,
         ntoken: int,
@@ -33,6 +192,8 @@ class TransformerGenerator(nn.Module):
         nlayers_cls: int,
         n_cls: int,
         vocab: Any,
+        pert_data: Any,
+        seq_len: int = 1536,
         dropout: float = 0.5,
         pad_token: str = "<pad>",
         pad_value: int = 0,
@@ -49,6 +210,18 @@ class TransformerGenerator(nn.Module):
         use_fast_transformer: bool = False,
         fast_transformer_backend: str = "flash",
         pre_norm: bool = False,
+        # GEARS stuff
+        device: Optional[torch.device] = None,
+        hidden_size: int = 64,
+        num_go_gnn_layers: int = 1,
+        num_gene_gnn_layers: int = 1,
+        decoder_hidden_size: int = 16,
+        num_similar_genes_go_graph: int = 20,
+        num_similar_genes_co_express_graph: int = 20,
+        # G_go: Optional[torch.Tensor] = None,
+        # G_go_weight: Optional[torch.Tensor] = None,
+        # G_coexpress: Optional[torch.Tensor] = None,
+        # G_coexpress_weight: Optional[torch.Tensor] = None,
     ):
         super().__init__()
         self.model_type = "Transformer"
@@ -121,6 +294,59 @@ class TransformerGenerator(nn.Module):
                 explicit_zero_prob=explicit_zero_prob,
             )
 
+        # ZACH
+        hidden_size = 64
+
+        self.device = (
+            device
+            if device is not None
+            else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
+
+        self.dataloader = pert_data.dataloader
+        self.adata = pert_data.adata
+        self.node_map = pert_data.node_map
+        self.node_map_pert = pert_data.node_map_pert
+        self.data_path = pert_data.data_path
+        self.dataset_name = pert_data.dataset_name
+        self.split = pert_data.split
+        self.seed = pert_data.seed
+        self.train_gene_set_size = pert_data.train_gene_set_size
+        self.set2conditions = pert_data.set2conditions
+        self.subgroup = pert_data.subgroup
+        self.gene_list = pert_data.gene_names.values.tolist()
+        self.pert_list = pert_data.pert_names.tolist()
+        self.num_genes = len(self.gene_list)
+        self.num_perts = len(self.pert_list)
+        self.default_pert_graph = pert_data.default_pert_graph
+        self.pert_emb = nn.Embedding(self.num_perts, hidden_size, max_norm=True)
+
+        self.model_initialize()
+
+        ### perturbation gene ontology GNN
+        self.G_sim = self.G_go.to(device)
+        self.G_sim_weight = self.G_go_weight.to(device)
+
+        self.sim_layers = torch.nn.ModuleList()
+
+        self.num_layers = num_go_gnn_layers
+        for i in range(1, self.num_layers + 1):
+            self.sim_layers.append(SGConv(hidden_size, hidden_size, 1))
+
+        # self.pert_fuse = MLP(
+        #     [hidden_size, hidden_size, hidden_size], last_layer_act="ReLU"
+        # )
+
+        self.seq_length = seq_len
+        self.d_model = d_model
+        self.pert_fuse = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, self.seq_length * self.d_model),
+        )
+
         self.init_weights()
 
     def init_weights(self) -> None:
@@ -131,14 +357,15 @@ class TransformerGenerator(nn.Module):
         self,
         src: Tensor,
         values: Tensor,
-        input_pert_flags,
+        pert_idx,
         src_key_padding_mask: Tensor,
     ) -> Tensor:
         src = self.encoder(src)  # (batch, seq_len, embsize)
         self.cur_gene_token_embs = src
         values = self.value_encoder(values)  # (batch, seq_len, embsize)
-        perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
-        total_embs = src + values + perts
+        # perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
+        pert_embedding = self.perturb_encode(pert_idx=pert_idx)
+        total_embs = src + values + pert_embedding
 
         # total_embs = self.bn(total_embs.permute(0, 2, 1)).permute(0, 2, 1)
         output = self.transformer_encoder(
@@ -172,11 +399,75 @@ class TransformerGenerator(nn.Module):
 
         return cell_emb
 
+    def perturb_encode(self, pert_idx):
+        pert_index = []
+        for idx, i in enumerate(pert_idx):
+            for j in i:
+                if j != -1:
+                    pert_index.append([idx, j])
+        pert_index = torch.tensor(pert_index).T
+
+        print(pert_index)
+
+        pert_global_emb = self.pert_emb(
+            torch.LongTensor(list(range(self.num_perts))).to(self.device)
+        )
+
+        ## augment global perturbation embedding with GNN
+        for idx, layer in enumerate(self.sim_layers):
+            pert_global_emb = layer(pert_global_emb, self.G_sim, self.G_sim_weight)
+            if idx < self.num_layers - 1:
+                pert_global_emb = pert_global_emb.relu()
+
+        if pert_index.shape[0] != 0:
+            ### in case all samples in the batch are controls, then there is no indexing for pert_index.
+            pert_track = {}
+            for i, j in enumerate(pert_index[0]):
+                if j.item() in pert_track:
+                    pert_track[j.item()] = (
+                        pert_track[j.item()] + pert_global_emb[pert_index[1][i]]
+                    )
+                else:
+                    pert_track[j.item()] = pert_global_emb[pert_index[1][i]]
+
+            if len(list(pert_track.values())) > 0:
+                # sample_row = list(pert_track.values())[0]
+
+                # for i in range(max(pert_track.keys()) + 1):
+                #     if i not in pert_track:
+                #         pert_track[i] = torch.zeros_like(sample_row)
+
+                if len(list(pert_track.values())) == 1:
+                    # circumvent when batch size = 1 with single perturbation and cannot feed into MLP
+                    emb_total = self.pert_fuse(
+                        torch.stack(list(pert_track.values()) * 2)
+                    )
+                else:
+                    emb_total = self.pert_fuse(torch.stack(list(pert_track.values())))
+
+                emb_total = emb_total.view(-1, self.seq_length, self.d_model)
+
+        pert_track_index_to_emb_index = {k: i for i, k in enumerate(pert_track.keys())}
+
+        batch_size = len(pert_idx)
+        new_tensor = torch.zeros(
+            (batch_size, self.seq_length, self.d_model), device=emb_total.device
+        )
+
+        for batch_idx in range(batch_size):
+            if batch_idx in pert_track:
+                new_tensor[batch_idx] = emb_total[
+                    pert_track_index_to_emb_index[batch_idx]
+                ]
+
+        return new_tensor
+
     def forward(
         self,
         src: Tensor,
         values: Tensor,
         input_pert_flags: Tensor,
+        pert_idx: Tensor,
         src_key_padding_mask: Tensor,
         CLS: bool = False,
         CCE: bool = False,
@@ -202,6 +493,7 @@ class TransformerGenerator(nn.Module):
         Returns:
             dict of output Tensors.
         """
+
         if self.explicit_zero_prob and not do_sample and not self.training:
             do_sample = True
             logger.warning("Auto set do_sample to True when model is in eval mode.")
@@ -217,7 +509,7 @@ class TransformerGenerator(nn.Module):
             processed_values = values
 
         transformer_output = self._encode(
-            src, processed_values, input_pert_flags, src_key_padding_mask
+            src, processed_values, pert_idx, src_key_padding_mask
         )
         output = {}
         mlm_output = self.decoder(transformer_output, values)
