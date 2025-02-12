@@ -12,6 +12,7 @@ save/
 *.ipynb
 temp.py
 test.py
+poetry.lock
 
 # Distribution / packaging
 .Python

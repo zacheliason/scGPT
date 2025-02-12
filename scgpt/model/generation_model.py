@@ -1,3 +1,4 @@
+import contextlib
 import math
 from typing import Any, Mapping, Optional, Union
 
@@ -218,6 +219,9 @@ class TransformerGenerator(nn.Module):
         decoder_hidden_size: int = 16,
         num_similar_genes_go_graph: int = 20,
         num_similar_genes_co_express_graph: int = 20,
+        include_zero_gene: str = "all",
+        max_seq_len: int = 1536,
+        gene_ids: Any = None,
         # G_go: Optional[torch.Tensor] = None,
         # G_go_weight: Optional[torch.Tensor] = None,
         # G_coexpress: Optional[torch.Tensor] = None,
@@ -294,15 +298,6 @@ class TransformerGenerator(nn.Module):
                 explicit_zero_prob=explicit_zero_prob,
             )
 
-        # ZACH
-        hidden_size = 64
-
-        self.device = (
-            device
-            if device is not None
-            else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
-
         self.dataloader = pert_data.dataloader
         self.adata = pert_data.adata
         self.node_map = pert_data.node_map
@@ -321,7 +316,23 @@ class TransformerGenerator(nn.Module):
         self.default_pert_graph = pert_data.default_pert_graph
         self.pert_emb = nn.Embedding(self.num_perts, hidden_size, max_norm=True)
 
+        self.device = (
+            device
+            if device is not None
+            else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
+
         self.model_initialize()
+
+        hidden_size = self.config["hidden_size"]
+        self.gene_ids = gene_ids
+
+        self.index_map = self._create_pert_index_map(
+            pert_data.pert_names.tolist(), pert_data.gene_names.values.tolist()
+        )
+
+        self.max_seq_len = max_seq_len
+        self.include_zero_gene = include_zero_gene
 
         ### perturbation gene ontology GNN
         self.G_sim = self.G_go.to(device)
@@ -407,8 +418,6 @@ class TransformerGenerator(nn.Module):
                     pert_index.append([idx, j])
         pert_index = torch.tensor(pert_index).T
 
-        print(pert_index)
-
         pert_global_emb = self.pert_emb(
             torch.LongTensor(list(range(self.num_perts))).to(self.device)
         )
@@ -462,18 +471,125 @@ class TransformerGenerator(nn.Module):
 
         return new_tensor
 
+    def _create_pert_index_map(self, pert_names, gene_names):
+        """
+        Creates a mapping from indices in pert_names to matching indices in gene_names.
+        Caches results to avoid recomputation.
+
+        Parameters:
+        pert_names (np.ndarray): Array of gene names to map from
+        gene_names (list): List of gene names to map to
+        cache_file (str): Path to save/load the index mapping
+
+        Returns:
+        dict: Mapping of indices {pert_index: gene_names_index}
+        """
+
+        # Create new mapping
+        index_map = {}
+
+        # Convert gene_names to dictionary for O(1) lookup
+        gene_to_idx = {gene: idx for idx, gene in enumerate(gene_names)}
+
+        # Create mapping
+        for idx, pert in enumerate(pert_names):
+            if pert in gene_to_idx:
+                # Store the mapping using string keys (JSON requirement)
+                index_map[str(idx)] = str(gene_to_idx[pert])
+
+        return index_map
+
+    def process_batch(self, batch_data, sample=True):
+        x, pert_idx = batch_data.x, batch_data.pert_idx
+        # pert = batch_data.pert
+
+        actual_batch_size = len(batch_data.y)
+        ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
+        pert_flags = torch.zeros_like(ori_gene_values)
+
+        for batch_idx, ps in enumerate(pert_idx):
+            for p in ps:
+                if str(p) in self.index_map:
+                    gene_idx = int(self.index_map[str(p)])
+                    pert_flags[batch_idx, gene_idx] = torch.tensor(
+                        1, dtype=torch.int64, device=pert_flags.device
+                    )
+
+                if str(p) not in self.index_map and p != -1:
+                    print(f"Missing perturbation {p} in index_map")
+
+        # pert_flags = x[:, 1].long().view(actual_batch_size, n_genes)
+        target_gene_values = batch_data.y  # (batch_size, n_genes)
+
+        if self.include_zero_gene in ["all", "batch-wise"]:
+            if self.include_zero_gene == "all":
+                input_gene_ids = torch.arange(
+                    self.num_genes, device=self.device, dtype=torch.long
+                )
+            else:
+                input_gene_ids = (
+                    ori_gene_values.nonzero()[:, 1].flatten().unique().sort()[0]
+                )
+            # # sample input_gene_id
+            # if len(input_gene_ids) > max_seq_len:
+            #     input_gene_ids = torch.randperm(len(input_gene_ids), device=device)[
+            #         :max_seq_len
+            #     ]
+
+            if sample:
+                # Get indices of perturbed genes (where pert_flags != 0)
+                perturbed_gene_mask = (pert_flags != 0).any(dim=0)  # Shape: (n_genes,)
+                perturbed_gene_ids = torch.where(perturbed_gene_mask)[0]
+
+                # Get indices of non-perturbed genes
+                non_perturbed_gene_ids = torch.where(~perturbed_gene_mask)[0]
+
+                # Prioritize perturbed genes in truncation
+                if len(perturbed_gene_ids) >= self.max_seq_len:
+                    # Case 1: More perturbed genes than `max_seq_len` → truncate perturbed genes
+                    input_gene_ids = perturbed_gene_ids[: self.max_seq_len]
+                else:
+                    # Case 2: Include all perturbed genes + sample non-perturbed genes
+                    num_non_perturbed = self.max_seq_len - len(perturbed_gene_ids)
+                    non_perturbed_sampled = non_perturbed_gene_ids[
+                        torch.randperm(len(non_perturbed_gene_ids))[:num_non_perturbed]
+                    ]
+                    input_gene_ids = torch.cat(
+                        [perturbed_gene_ids, non_perturbed_sampled]
+                    )
+
+            input_values = ori_gene_values[:, input_gene_ids]
+            input_pert_flags = pert_flags[:, input_gene_ids].to(
+                device=self.device, dtype=torch.long
+            )
+            target_values = target_gene_values[:, input_gene_ids]
+
+            src = map_raw_id_to_vocab_id(input_gene_ids, self.gene_ids)
+            src = src.repeat(actual_batch_size, 1)
+
+            src_key_padding_mask = torch.zeros_like(
+                input_values, dtype=torch.bool, device=self.device
+            )
+
+            return (
+                src,
+                input_values,
+                input_pert_flags,
+                target_values,
+                src_key_padding_mask,
+                input_gene_ids,
+                pert_idx,
+            )
+
     def forward(
         self,
-        src: Tensor,
-        values: Tensor,
-        input_pert_flags: Tensor,
-        pert_idx: Tensor,
-        src_key_padding_mask: Tensor,
+        batch_data,
         CLS: bool = False,
         CCE: bool = False,
         MVC: bool = False,
         ECS: bool = False,
         do_sample: bool = False,
+        sample_batch: bool = True,
     ) -> Mapping[str, Tensor]:
         """
         Args:
@@ -494,6 +610,16 @@ class TransformerGenerator(nn.Module):
             dict of output Tensors.
         """
 
+        (
+            src,
+            input_values,
+            input_pert_flags,
+            target_values,
+            src_key_padding_mask,
+            input_gene_ids,
+            pert_idx,
+        ) = self.process_batch(batch_data, sample=sample_batch)
+
         if self.explicit_zero_prob and not do_sample and not self.training:
             do_sample = True
             logger.warning("Auto set do_sample to True when model is in eval mode.")
@@ -503,16 +629,16 @@ class TransformerGenerator(nn.Module):
             from ..preprocess import binning
 
             processed_values = torch.stack(
-                [binning(row, n_bins=self.n_input_bins) for row in values], dim=0
-            ).to(values.device)
+                [binning(row, n_bins=self.n_input_bins) for row in input_values], dim=0
+            ).to(input_values.device)
         else:
-            processed_values = values
+            processed_values = input_values
 
         transformer_output = self._encode(
             src, processed_values, pert_idx, src_key_padding_mask
         )
         output = {}
-        mlm_output = self.decoder(transformer_output, values)
+        mlm_output = self.decoder(transformer_output, input_values)
         if self.explicit_zero_prob and do_sample:
             bernoulli = Bernoulli(probs=mlm_output["zero_probs"])
             output["mlm_output"] = bernoulli.sample() * mlm_output["pred"]
@@ -521,7 +647,7 @@ class TransformerGenerator(nn.Module):
         if self.explicit_zero_prob:
             output["mlm_zero_probs"] = mlm_output["zero_probs"]
 
-        cell_emb = self._get_cell_emb_from_layer(transformer_output, values)
+        cell_emb = self._get_cell_emb_from_layer(transformer_output, input_values)
         if CLS:
             output["cls_output"] = self.cls_decoder(cell_emb)  # (batch, n_cls)
         if MVC:
@@ -550,6 +676,9 @@ class TransformerGenerator(nn.Module):
             cos_sim = F.relu(cos_sim)
 
             output["loss_ecs"] = torch.mean(1 - (cos_sim - self.ecs_threshold) ** 2)
+
+        output["target_values"] = target_values
+        output["input_gene_ids"] = input_gene_ids
 
         return output
 
@@ -588,7 +717,7 @@ class TransformerGenerator(nn.Module):
         self,
         batch_data,
         include_zero_gene="batch-wise",
-        gene_ids=None,
+        # gene_ids=None,
         amp=True,
     ) -> Tensor:
         """
@@ -601,42 +730,29 @@ class TransformerGenerator(nn.Module):
         self.eval()
         device = next(self.parameters()).device
         batch_data.to(device)
-        batch_size = len(batch_data.pert)
-        x: torch.Tensor = batch_data.x
-        ori_gene_values = x[:, 0].view(batch_size, -1)  # (batch_size, n_genes)
-        pert_flags = x[:, 1].long().view(batch_size, -1)
 
-        if include_zero_gene in ["all", "batch-wise"]:
-            assert gene_ids is not None
-            if include_zero_gene == "all":
-                input_gene_ids = torch.arange(ori_gene_values.size(1), device=device)
-            else:  # batch-wise
-                input_gene_ids = (
-                    ori_gene_values.nonzero()[:, 1].flatten().unique().sort()[0]
-                )
-            input_values = ori_gene_values[:, input_gene_ids]
-            input_pert_flags = pert_flags[:, input_gene_ids]
-
-            mapped_input_gene_ids = map_raw_id_to_vocab_id(input_gene_ids, gene_ids)
-            mapped_input_gene_ids = mapped_input_gene_ids.repeat(batch_size, 1)
-
-            src_key_padding_mask = torch.zeros_like(
-                input_values, dtype=torch.bool, device=device
+        if self.include_zero_gene in ["all", "batch-wise"]:
+            context_manager = (
+                torch.cuda.amp.autocast(enabled=amp)
+                if torch.cuda.is_available()
+                else contextlib.nullcontext()
             )
-            with torch.cuda.amp.autocast(enabled=amp):
+
+            with context_manager:
                 output_dict = self(
-                    mapped_input_gene_ids,
-                    input_values,
-                    input_pert_flags,
-                    src_key_padding_mask=src_key_padding_mask,
+                    batch_data,
                     CLS=False,
                     CCE=False,
                     MVC=False,
                     ECS=False,
                     do_sample=True,
+                    sample_batch=False,
                 )
             output_values = output_dict["mlm_output"].float()
-            pred_gene_values = torch.zeros_like(ori_gene_values)
+            input_gene_ids = output_dict["input_gene_ids"]
+            pred_gene_values = torch.zeros_like(
+                batch_data.x[:, 0].view(len(batch_data.pert), -1)
+            )
             pred_gene_values[:, input_gene_ids] = output_values
         return pred_gene_values
 

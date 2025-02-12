@@ -1,11 +1,11 @@
 import argparse
+import contextlib
 import copy
 import gc
 import json
 import os
 import time
 import warnings
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import matplotlib
@@ -32,47 +32,8 @@ from scgpt.model import TransformerGenerator
 from scgpt.tokenizer.gene_tokenizer import GeneVocab
 from scgpt.utils import (
     compute_perturbation_metrics,
-    map_raw_id_to_vocab_id,
     set_seed,
 )
-
-
-def create_pert_index_map(pert_names, gene_names, cache_file="gene_index_map.json"):
-    """
-    Creates a mapping from indices in pert_names to matching indices in gene_names.
-    Caches results to avoid recomputation.
-
-    Parameters:
-    pert_names (np.ndarray): Array of gene names to map from
-    gene_names (list): List of gene names to map to
-    cache_file (str): Path to save/load the index mapping
-
-    Returns:
-    dict: Mapping of indices {pert_index: gene_names_index}
-    """
-    # Check if cached mapping exists
-    cache_path = Path(cache_file)
-    if cache_path.exists():
-        with open(cache_path, "r") as f:
-            return json.load(f)
-
-    # Create new mapping
-    index_map = {}
-
-    # Convert gene_names to dictionary for O(1) lookup
-    gene_to_idx = {gene: idx for idx, gene in enumerate(gene_names)}
-
-    # Create mapping
-    for idx, pert in enumerate(pert_names):
-        if pert in gene_to_idx:
-            # Store the mapping using string keys (JSON requirement)
-            index_map[str(idx)] = str(gene_to_idx[pert])
-
-    # Cache the results
-    with open(cache_path, "w") as f:
-        json.dump(index_map, f)
-
-    return index_map
 
 
 def prepare_data(
@@ -89,10 +50,6 @@ def prepare_data(
     pert_data.get_dataloader(batch_size=batch_size, test_batch_size=test_batch_size)
     # pert_data = clear_pert_data_memory(pert_data)
 
-    index_map = create_pert_index_map(
-        pert_data.pert_names.tolist(), pert_data.gene_names.values.tolist()
-    )
-
     genes = pert_data.adata.var["gene_name"].tolist()
     n_genes = len(genes)
     vocab = Vocab(
@@ -104,10 +61,12 @@ def prepare_data(
         [vocab[gene] if gene in vocab else vocab["<pad>"] for gene in genes], dtype=int
     )
 
-    return pert_data, vocab, gene_ids, n_genes, index_map
+    return pert_data, vocab, gene_ids, n_genes
 
 
-def setup_model(model_dir, vocab, genes, default_config):
+def setup_model(
+    model_dir, vocab, genes, default_config, max_seq_len, include_zero_gene, gene_ids
+):
     print(f"initial vocab length {len(vocab)}")
 
     # Unpack default model settings
@@ -183,6 +142,9 @@ def setup_model(model_dir, vocab, genes, default_config):
         device=device,
         pert_data=pert_data,
         seq_len=seq_len,
+        include_zero_gene=include_zero_gene,
+        max_seq_len=max_seq_len,
+        gene_ids=gene_ids,
     )
 
     # Load pretrained weights
@@ -296,7 +258,6 @@ def train(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     scaler: any,
-    index_map: Dict,
 ) -> None:
     """
     Train the model for one epoch with gradient accumulation.
@@ -316,94 +277,30 @@ def train(
         # print(f"Shape of x: {x.shape}")
         # print(f"Values of x:\n{x}")
 
-        x, pert_idx = batch_data.x, batch_data.pert_idx
-        pert = batch_data.pert
-
-        ori_gene_values = x[:, 0].view(actual_batch_size, n_genes)
-        pert_flags = torch.zeros_like(ori_gene_values)
-
-        for batch_idx, ps in enumerate(pert_idx):
-            for p in ps:
-                if str(p) in index_map:
-                    gene_idx = int(index_map[str(p)])
-                    pert_flags[batch_idx, gene_idx] = torch.tensor(
-                        1, dtype=torch.int64, device=pert_flags.device
-                    )
-
-                if str(p) not in index_map and p != -1:
-                    print(f"Missing perturbation {p} in index_map")
-
-        # pert_flags = x[:, 1].long().view(actual_batch_size, n_genes)
-        target_gene_values = batch_data.y  # (batch_size, n_genes)
-
-        print(f"Original gene values shape: {ori_gene_values.shape}")
-        print(f"Original gene values:\n{ori_gene_values}")
-        print(f"Perturbation flags shape: {pert_flags.shape}")
-        print(f"Perturbation flags:\n{pert_flags}")
-
-        if include_zero_gene in ["all", "batch-wise"]:
-            if include_zero_gene == "all":
-                input_gene_ids = torch.arange(n_genes, device=device, dtype=torch.long)
-            else:
-                input_gene_ids = (
-                    ori_gene_values.nonzero()[:, 1].flatten().unique().sort()[0]
-                )
-            # # sample input_gene_id
-            # if len(input_gene_ids) > max_seq_len:
-            #     input_gene_ids = torch.randperm(len(input_gene_ids), device=device)[
-            #         :max_seq_len
-            #     ]
-
-            # Get indices of perturbed genes (where pert_flags != 0)
-            perturbed_gene_mask = (pert_flags != 0).any(dim=0)  # Shape: (n_genes,)
-            perturbed_gene_ids = torch.where(perturbed_gene_mask)[0]
-
-            # Get indices of non-perturbed genes
-            non_perturbed_gene_ids = torch.where(~perturbed_gene_mask)[0]
-
-            # Prioritize perturbed genes in truncation
-            if len(perturbed_gene_ids) >= max_seq_len:
-                # Case 1: More perturbed genes than `max_seq_len` → truncate perturbed genes
-                input_gene_ids = perturbed_gene_ids[:max_seq_len]
-            else:
-                # Case 2: Include all perturbed genes + sample non-perturbed genes
-                num_non_perturbed = max_seq_len - len(perturbed_gene_ids)
-                non_perturbed_sampled = non_perturbed_gene_ids[
-                    torch.randperm(len(non_perturbed_gene_ids))[:num_non_perturbed]
-                ]
-                input_gene_ids = torch.cat([perturbed_gene_ids, non_perturbed_sampled])
-
-            input_values = ori_gene_values[:, input_gene_ids]
-            input_pert_flags = pert_flags[:, input_gene_ids].to(
-                device=device, dtype=torch.long
-            )
-            target_values = target_gene_values[:, input_gene_ids]
-
-            mapped_input_gene_ids = map_raw_id_to_vocab_id(input_gene_ids, gene_ids)
-            mapped_input_gene_ids = mapped_input_gene_ids.repeat(actual_batch_size, 1)
-
-            src_key_padding_mask = torch.zeros_like(
-                input_values, dtype=torch.bool, device=device
-            )
-
-        output_dict = model(
-            mapped_input_gene_ids,
-            input_values,
-            input_pert_flags,
-            pert_idx=pert_idx,
-            src_key_padding_mask=src_key_padding_mask,
-            CLS=CLS,
-            CCE=CCE,
-            MVC=MVC,
-            ECS=ECS,
+        context_manager = (
+            torch.cuda.amp.autocast()
+            if torch.cuda.is_available()
+            else contextlib.nullcontext()
         )
-        output_values = output_dict["mlm_output"]
 
-        masked_positions = torch.ones_like(input_values, dtype=torch.bool)  # Use all
-        loss = loss_mse = criterion(output_values, target_values, masked_positions)
+        with context_manager:
+            output_dict = model(
+                batch_data,
+                CLS=CLS,
+                CCE=CCE,
+                MVC=MVC,
+                ECS=ECS,
+            )
+            output_values = output_dict["mlm_output"]
+            target_values = output_dict["target_values"]
 
-        # Normalize loss by accumulation steps
-        loss = loss / accumulation_steps
+            masked_positions = torch.ones_like(
+                target_values, dtype=torch.bool
+            )  # Use all
+            loss = loss_mse = criterion(output_values, target_values, masked_positions)
+
+            # Normalize loss by accumulation steps
+            loss = loss / accumulation_steps
 
         # Accumulate gradients
         scaler.scale(loss).backward()
@@ -473,7 +370,7 @@ def eval_perturb(
             p = model.pred_perturb(
                 batch,
                 include_zero_gene=include_zero_gene,
-                gene_ids=gene_ids,
+                # gene_ids=gene_ids,
             )
             t = batch.y
             pred.extend(p.cpu())
@@ -547,7 +444,9 @@ def predict(
             preds = []
             for batch_data in loader:
                 pred_gene_values = model.pred_perturb(
-                    batch_data, include_zero_gene, gene_ids=gene_ids, amp=amp
+                    batch_data,
+                    include_zero_gene,
+                    amp=amp,  # gene_ids=gene_ids,
                 )
                 preds.append(pred_gene_values)
             preds = torch.cat(preds, dim=0)
@@ -718,7 +617,7 @@ logger.info(f"Running on {time.strftime('%Y-%m-%d %H:%M:%S')}")
 # RUN
 # ---------------------------------------------------------------------------------------
 print("Running scGPT-perturbation...")
-pert_data, vocab, gene_ids, n_genes, index_map = prepare_data(
+pert_data, vocab, gene_ids, n_genes = prepare_data(
     batch_size, eval_batch_size, data_dir, data_name, split
 )
 
@@ -729,6 +628,9 @@ model = setup_model(
     vocab=vocab,
     genes=pert_data.adata.var["gene_name"].tolist(),
     default_config=default_model_settings,
+    max_seq_len=max_seq_len,
+    include_zero_gene=include_zero_gene,
+    gene_ids=gene_ids,
 )
 
 # criterion_cls = nn.CrossEntropyLoss()
@@ -759,7 +661,6 @@ for epoch in range(1, epochs + 1):
         optimizer=optimizer,
         scheduler=scheduler,
         scaler=scaler,
-        index_map=index_map,
     )
 
     val_res = eval_perturb(valid_loader, model, device)

@@ -24,8 +24,8 @@ else
     echo "Directory $WD does not exist. Initiating setup."
     mkdir -p $WD
     cd $WD
-    cp $HOME_DIR/pyproject.toml $WD/pyproject.toml
-    cp $HOME_DIR/scgpt_perturb.py $WD/scgpt_perturb.py
+    #cp $HOME_DIR/pyproject.toml $WD/pyproject.toml
+    #cp $HOME_DIR/scgpt_perturb.py $WD/scgpt_perturb.py
 
     # Set up uv
     export UV_ROOT=$WD/.uv
@@ -37,6 +37,11 @@ else
     uv venv $WD/.venv
     uv pip install -r pyproject.toml
     source $WD/.venv/bin/activate
+
+    # Download scGPT via uv pip
+    git clone https://github.com/zacheliason/scGPT.git $WD/scGPT
+    mv $WD/scGPT/* $WD/
+    rm -rf $WD/scGPT
 
     # Download data
     mkdir -p $DATA_DIR
