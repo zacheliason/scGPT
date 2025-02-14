@@ -374,11 +374,12 @@ class TransformerGenerator(nn.Module):
         src = self.encoder(src)  # (batch, seq_len, embsize)
         self.cur_gene_token_embs = src
         values = self.value_encoder(values)  # (batch, seq_len, embsize)
+        input_pert_flags = pert_idx
         perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
         # pert_embedding = self.perturb_encode(pert_idx=pert_idx)
-        print(f"Pert Embedding Shape: {perts.shape}")
-        print(f"Source Shape: {src.shape}")
-        print(f"Values Shape: {values.shape}")
+        # print(f"Pert Embedding Shape: {perts.shape}")
+        # print(f"Source Shape: {src.shape}")
+        # print(f"Values Shape: {values.shape}")
         # total_embs = src + values + pert_embedding
         total_embs = src + values + perts
 
