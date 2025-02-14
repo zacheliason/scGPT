@@ -79,6 +79,9 @@ def setup_model(
     use_fast_transformer = default_config["use_fast_transformer"]
     pretrained_dict = None
 
+    print()
+    print(model_dir)
+    print()
     # Update model settings from checkpoint, if provided
     if model_dir is not None and os.path.exists(model_dir):
         model_config_file = os.path.join(model_dir, "args.json")

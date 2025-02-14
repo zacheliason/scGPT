@@ -376,6 +376,9 @@ class TransformerGenerator(nn.Module):
         values = self.value_encoder(values)  # (batch, seq_len, embsize)
         # perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
         pert_embedding = self.perturb_encode(pert_idx=pert_idx)
+        print(f"Pert Embedding Shape: {pert_embedding.shape}")
+        print(f"Source Shape: {src.shape}")
+        print(f"Values Shape: {values.shape}")
         total_embs = src + values + pert_embedding
 
         # total_embs = self.bn(total_embs.permute(0, 2, 1)).permute(0, 2, 1)

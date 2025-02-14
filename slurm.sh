@@ -27,6 +27,11 @@ else
     #cp $HOME_DIR/pyproject.toml $WD/pyproject.toml
     #cp $HOME_DIR/scgpt_perturb.py $WD/scgpt_perturb.py
 
+    # Download scGPT via uv pip
+    git clone https://github.com/zacheliason/scGPT.git $WD/scGPT
+    mv $WD/scGPT/* $WD/
+    rm -rf $WD/scGPT
+
     # Set up uv
     export UV_ROOT=$WD/.uv
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -38,11 +43,6 @@ else
     uv pip install -r pyproject.toml
     source $WD/.venv/bin/activate
 
-    # Download scGPT via uv pip
-    git clone https://github.com/zacheliason/scGPT.git $WD/scGPT
-    mv $WD/scGPT/* $WD/
-    rm -rf $WD/scGPT
-
     # Download data
     mkdir -p $DATA_DIR
     gdown --folder https://drive.google.com/drive/folders/1oWh_-ZRdhtoGQ2Fw24HP41FgLoomVo-y -O $DATA_DIR/scGPT_human
@@ -51,4 +51,4 @@ else
 fi
 
 echo "Running scGPT on data in $DATA_DIR and saving results to $RUN_DIR"
-source $WD/.venv/bin/activate && python3 scgpt_perturb.py -d $DATA_DIR -o $RUN_DIR
+source $WD/.venv/bin/activate && python3 scgpt_perturb_map.py -d $DATA_DIR -o $RUN_DIR
