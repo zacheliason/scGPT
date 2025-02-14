@@ -374,12 +374,13 @@ class TransformerGenerator(nn.Module):
         src = self.encoder(src)  # (batch, seq_len, embsize)
         self.cur_gene_token_embs = src
         values = self.value_encoder(values)  # (batch, seq_len, embsize)
-        # perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
-        pert_embedding = self.perturb_encode(pert_idx=pert_idx)
-        print(f"Pert Embedding Shape: {pert_embedding.shape}")
+        perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
+        # pert_embedding = self.perturb_encode(pert_idx=pert_idx)
+        print(f"Pert Embedding Shape: {perts.shape}")
         print(f"Source Shape: {src.shape}")
         print(f"Values Shape: {values.shape}")
-        total_embs = src + values + pert_embedding
+        # total_embs = src + values + pert_embedding
+        total_embs = src + values + perts
 
         # total_embs = self.bn(total_embs.permute(0, 2, 1)).permute(0, 2, 1)
         output = self.transformer_encoder(
@@ -637,9 +638,14 @@ class TransformerGenerator(nn.Module):
         else:
             processed_values = input_values
 
+        # transformer_output = self._encode(
+        #     src, processed_values, pert_idx, src_key_padding_mask
+        # )
+
         transformer_output = self._encode(
-            src, processed_values, pert_idx, src_key_padding_mask
+            src, processed_values, input_pert_flags, src_key_padding_mask
         )
+
         output = {}
         mlm_output = self.decoder(transformer_output, input_values)
         if self.explicit_zero_prob and do_sample:
@@ -705,6 +711,7 @@ class TransformerGenerator(nn.Module):
         outputs = []
         N = src.size(0)
         device = next(self.parameters()).device
+        print("MAYDAY ZACH")
         for i in trange(0, N, batch_size):
             output = self._encode(
                 src[i : i + batch_size].to(device),
