@@ -370,15 +370,18 @@ class TransformerGenerator(nn.Module):
         values: Tensor,
         pert_idx,
         src_key_padding_mask: Tensor,
+        seq_len: int,
     ) -> Tensor:
         src = self.encoder(src)  # (batch, seq_len, embsize)
         self.cur_gene_token_embs = src
         values = self.value_encoder(values)  # (batch, seq_len, embsize)
         # perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
-        pert_embedding = self.perturb_encode(pert_idx=pert_idx)
-        print(f"Pert Embedding Shape: {pert_embedding.shape}")
-        print(f"Source Shape: {src.shape}")
-        print(f"Values Shape: {values.shape}")
+        pert_embedding = self.perturb_encode(seq_len=seq_len, pert_idx=pert_idx)
+
+        # print(f"Pert Embedding Shape: {pert_embedding.shape}")
+        # print(f"Source Shape: {src.shape}")
+        # print(f"Values Shape: {values.shape}")
+
         total_embs = src + values + pert_embedding
 
         # total_embs = self.bn(total_embs.permute(0, 2, 1)).permute(0, 2, 1)
@@ -413,7 +416,7 @@ class TransformerGenerator(nn.Module):
 
         return cell_emb
 
-    def perturb_encode(self, pert_idx):
+    def perturb_encode(self, pert_idx, seq_len):
         pert_index = []
         for idx, i in enumerate(pert_idx):
             for j in i:
@@ -463,7 +466,7 @@ class TransformerGenerator(nn.Module):
 
         batch_size = len(pert_idx)
         new_tensor = torch.zeros(
-            (batch_size, self.seq_length, self.d_model), device=emb_total.device
+            (batch_size, seq_len, self.d_model), device=emb_total.device
         )
 
         for batch_idx in range(batch_size):
@@ -637,8 +640,9 @@ class TransformerGenerator(nn.Module):
         else:
             processed_values = input_values
 
+        seq_len = processed_values.size(1)
         transformer_output = self._encode(
-            src, processed_values, pert_idx, src_key_padding_mask
+            src, processed_values, pert_idx, src_key_padding_mask, seq_len=seq_len
         )
         output = {}
         mlm_output = self.decoder(transformer_output, input_values)
