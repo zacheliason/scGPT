@@ -648,7 +648,7 @@ class TransformerGenerator(nn.Module):
         seq_len = processed_values.size(1)
 
         print(
-            f"src: {src.shape}\tprocessed_values: {processed_values.shape}\tpert_idx: {pert_idx.shape}"
+            f"src: {src.shape}\tprocessed_values: {processed_values.shape}\tpert_idx: {len(pert_idx)}"
         )
         transformer_output = self._encode(
             src, processed_values, pert_idx, src_key_padding_mask, seq_len=seq_len
