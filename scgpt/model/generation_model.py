@@ -355,7 +355,7 @@ class TransformerGenerator(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, self.seq_length * self.d_model),
+            nn.Linear(hidden_size, self.d_model),
         )
 
         self.init_weights()
@@ -376,7 +376,7 @@ class TransformerGenerator(nn.Module):
         self.cur_gene_token_embs = src
         values = self.value_encoder(values)  # (batch, seq_len, embsize)
         # perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
-        pert_embedding = self.perturb_encode(seq_len=seq_len, pert_idx=pert_idx)
+        pert_embedding = self.perturb_encode(pert_idx=pert_idx, seq_len=seq_len)
 
         if pert_embedding.shape != values.shape:
             raise ValueError(
@@ -459,13 +459,17 @@ class TransformerGenerator(nn.Module):
 
                 if len(list(pert_track.values())) == 1:
                     # circumvent when batch size = 1 with single perturbation and cannot feed into MLP
-                    emb_total = self.pert_fuse(
-                        torch.stack(list(pert_track.values()) * 2)
-                    )
+                    emb_total = torch.stack(list(pert_track.values()) * 2)
+                    emb_total = emb_total.unsqueeze(1)
+                    emb_total = emb_total.expand(-1, seq_len, -1)
+                    emb_total = self.pert_fuse(emb_total)
                 else:
-                    emb_total = self.pert_fuse(torch.stack(list(pert_track.values())))
+                    emb_total = torch.stack(list(pert_track.values()))
+                    emb_total = emb_total.unsqueeze(1)
+                    emb_total = emb_total.expand(-1, seq_len, -1)
+                    emb_total = self.pert_fuse(emb_total)
 
-                emb_total = emb_total.view(-1, self.seq_length, self.d_model)
+                # emb_total = emb_total.view(-1, seq_len, self.d_model)
 
         pert_track_index_to_emb_index = {k: i for i, k in enumerate(pert_track.keys())}
 
@@ -480,6 +484,7 @@ class TransformerGenerator(nn.Module):
                     pert_track_index_to_emb_index[batch_idx]
                 ]
 
+        # print(f"seq_len: {seq_len}, new_tensor: {new_tensor.shape}")
         return new_tensor
 
     def _create_pert_index_map(self, pert_names, gene_names):
@@ -647,9 +652,6 @@ class TransformerGenerator(nn.Module):
 
         seq_len = processed_values.size(1)
 
-        print(
-            f"src: {src.shape}\tprocessed_values: {processed_values.shape}\tpert_idx: {len(pert_idx)}"
-        )
         transformer_output = self._encode(
             src, processed_values, pert_idx, src_key_padding_mask, seq_len=seq_len
         )
