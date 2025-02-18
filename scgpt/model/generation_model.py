@@ -378,6 +378,11 @@ class TransformerGenerator(nn.Module):
         # perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
         pert_embedding = self.perturb_encode(seq_len=seq_len, pert_idx=pert_idx)
 
+        if pert_embedding.shape != values.shape:
+            raise ValueError(
+                f"Shape of pert_embedding {pert_embedding.shape} does not match the shape of values {values.shape}."
+            )
+
         # print(f"Pert Embedding Shape: {pert_embedding.shape}")
         # print(f"Source Shape: {src.shape}")
         # print(f"Values Shape: {values.shape}")
@@ -641,6 +646,10 @@ class TransformerGenerator(nn.Module):
             processed_values = input_values
 
         seq_len = processed_values.size(1)
+
+        print(
+            f"src: {src.shape}\tprocessed_values: {processed_values.shape}\tpert_idx: {pert_idx.shape}"
+        )
         transformer_output = self._encode(
             src, processed_values, pert_idx, src_key_padding_mask, seq_len=seq_len
         )

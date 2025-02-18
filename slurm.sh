@@ -2,7 +2,7 @@
 
 #SBATCH -o /CHILDRENS/home/g29755807/scgpt/runs/%j/scgpt.log
 #SBATCH -e /CHILDRENS/home/g29755807/scgpt/runs/%j/scgpt.err
-#SBATCH -p large-gpu
+#SBATCH -p med-gpu
 #SBATCH -N 1
 #SBATCH -D /scratch/ligrp/zach/scgpt
 #SBATCH -J scGPT_Test
