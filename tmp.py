@@ -1,5 +1,14 @@
+import scanpy as sc
 import torch
 import torch.nn as nn
+
+h5ad_file = (
+    "/Users/zach/Documents/School/wei/zscGPT/data/adamson/perturb_processed.h5ad"
+)
+
+adata = sc.read_h5ad(h5ad_file)
+
+print()
 
 
 class PertFusion(nn.Module):

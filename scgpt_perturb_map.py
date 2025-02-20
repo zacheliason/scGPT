@@ -14,6 +14,14 @@ import numpy as np
 import psutil
 import seaborn as sns
 import torch
+
+device = torch.device("cuda" if torch.cuda.is_available() else "mps")
+if not torch.cuda.is_available():
+    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+    import torch
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps")
+
 from gears.inference import deeper_analysis, non_dropout_analysis
 from gears.utils import create_cell_graph_dataset_for_prediction
 from torch import nn
@@ -261,9 +269,10 @@ def train(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     scaler: any,
-) -> None:
+) -> float:
     """
     Train the model for one epoch with gradient accumulation.
+    Returns the average loss for the epoch.
     """
     model.train()
     total_loss, total_mse = 0.0, 0.0
@@ -276,9 +285,6 @@ def train(
         actual_batch_size = len(batch_data.y)
         batch_data.to(device)
         x: torch.Tensor = batch_data.x  # (batch_size * n_genes, 2)
-
-        # print(f"Shape of x: {x.shape}")
-        # print(f"Values of x:\n{x}")
 
         context_manager = (
             torch.cuda.amp.autocast()
@@ -347,6 +353,8 @@ def train(
             total_loss = 0
             total_mse = 0
             start_time = time.time()
+
+    return total_loss / num_batches
 
 
 def eval_perturb(
@@ -519,8 +527,6 @@ if torch.cuda.is_available():
 
 matplotlib.rcParams["savefig.transparent"] = False
 warnings.filterwarnings("ignore")
-device = torch.device("cuda" if torch.cuda.is_available() else "mps")
-
 set_seed(42)
 
 # settings for data prcocessing
@@ -544,7 +550,7 @@ lr = 1e-4  # or 1e-4
 batch_size = 32
 eval_batch_size = 32
 accumulation_steps = 2
-epochs = 15
+epochs = 1  # 15
 schedule_interval = 1
 early_stop = 10
 
@@ -649,6 +655,10 @@ sest_model = None
 patience = 0
 best_model = None
 
+
+train_losses = []
+val_losses = []
+
 for epoch in range(1, epochs + 1):
     epoch_start_time = time.time()
     train_loader = pert_data.dataloader["train_loader"]
@@ -656,7 +666,8 @@ for epoch in range(1, epochs + 1):
 
     print(f"\rEpoch {epoch}/{epochs} | ", end="", flush=True)
 
-    train(
+    # Train the model and get the average loss for the epoch
+    train_loss = train(
         model=model,
         train_loader=train_loader,
         n_genes=n_genes,
@@ -665,11 +676,14 @@ for epoch in range(1, epochs + 1):
         scheduler=scheduler,
         scaler=scaler,
     )
+    train_losses.append(train_loss)
 
+    # Evaluate on the validation set
     val_res = eval_perturb(valid_loader, model, device)
     val_metrics = compute_perturbation_metrics(
         val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
     )
+    val_losses.append(val_metrics["loss"])  # Assuming val_metrics contains a "loss" key
 
     print(
         f"Val Pearson: {val_metrics['pearson']:5.4f} | Time: {time.time() - epoch_start_time:5.2f}s",
@@ -702,13 +716,27 @@ for epoch in range(1, epochs + 1):
 
     scheduler.step()
 
-    if best_model is not None:
-        torch.save(
-            best_model.state_dict(),
-            os.path.join(data_dir, "scGPT_human", "best_model.pt"),
-        )
+# Plot the training and validation losses
+plt.figure(figsize=(10, 5))
+plt.plot(train_losses, label="Training Loss")
+plt.plot(val_losses, label="Validation Loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("Training and Validation Loss")
+plt.legend()
+plt.grid(True)
+
+# Save the plot to the output directory
+loss_plot_path = os.path.join(output_dir, "loss_plot.png")
+plt.savefig(loss_plot_path)
+plt.close()
+
+logger.info(f"Loss plot saved to {loss_plot_path}")
 
 """ ## Evaluations"""
+
+if best_model is None:
+    best_model = model
 
 for p in perts_to_plot:
     plot_perturbation(
