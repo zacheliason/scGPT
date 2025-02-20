@@ -1,6 +1,5 @@
 import argparse
 import contextlib
-import copy
 import gc
 import json
 import os
@@ -52,8 +51,7 @@ def prepare_data(
     split="simulation",
 ):
     pert_data = PertData(data_dir)
-    # pert_data.load(data_name=data_name)
-    pert_data.load(data_name="norman")
+    pert_data.load(data_name=data_name)
     pert_data.prepare_split(split=split, seed=1)
     pert_data.get_dataloader(batch_size=batch_size, test_batch_size=test_batch_size)
     # pert_data = clear_pert_data_memory(pert_data)
@@ -570,7 +568,7 @@ log_interval = 100
 
 
 # dataset and evaluation choices
-data_name = "adamson"
+data_name = "norman"
 split = "simulation"
 if data_name == "norman":
     perts_to_plot = ["SAMD1+ZBTB1"]

@@ -1622,19 +1622,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyrfr"
-version = "0.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/17/c3/88ec42a429a8d439c912b42ca86c2686ca5a9ad60313a8e1f05728515ee7/pyrfr-0.9.0.tar.gz", hash = "sha256:bc6e758317cf79579fe6b7ce5f01dd42f77c991bf707e33646e8c6a9112c186b", size = 295099 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/66/ef/1b4c2af06a7b30b88813a165f2571e8734e5ce7076eeef64d4d8818fcb42/pyrfr-0.9.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:98ffb774b6b428b95c1b31520caab62479a74223e9bd8cc5144d1c3dda995598", size = 4527297 },
-    { url = "https://files.pythonhosted.org/packages/eb/52/6f20c5dbf908d60fb91f05f2f3e97eb318eaa43d7b10ebf3e868b03773e7/pyrfr-0.9.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:20249bae50449ab02f41df580490e14d3e2f717fdcb4287ba26b2e05deef246a", size = 4603971 },
-    { url = "https://files.pythonhosted.org/packages/fe/04/e951265bd1473dbd5859642a284528ea8e4cf7c1a13d4bd40c4fb6c1e6f1/pyrfr-0.9.0-cp39-cp39-manylinux_2_12_i686.manylinux2010_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:1d7697fffbcc6d1cf5787d082c52fe977eb08270d86540b8a5c0a38745d45338", size = 4492086 },
-    { url = "https://files.pythonhosted.org/packages/c3/7b/06c7af78c55559be3bfc7cf296e34ac83ae8d3e322383127f307e846c1df/pyrfr-0.9.0-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b869b9bcf62d6df61bb2368c57f87db6113c5b6d468409292f3615dbe22f246c", size = 4526727 },
-    { url = "https://files.pythonhosted.org/packages/19/22/015ed1acbb945d9ac92eeb8a002149fd9482707efaea711c419b4c74e8b7/pyrfr-0.9.0-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:687c32f83e98894df296cf7fd5460f48e5c1dfa300b1d02f81cd71c0a282f185", size = 4603394 },
-]
-
-[[package]]
 name = "pysocks"
 version = "1.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1812,7 +1799,6 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
-    { name = "pyrfr" },
     { name = "scanpy" },
     { name = "scikit-learn" },
     { name = "scipy" },
@@ -1841,7 +1827,6 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.9.4" },
     { name = "numpy", specifier = ">=2.0.2" },
     { name = "pandas", specifier = ">=2.2.3" },
-    { name = "pyrfr", specifier = ">=0.9.0" },
     { name = "scanpy", specifier = ">=1.10.3" },
     { name = "scikit-learn", specifier = ">=1.6.0" },
     { name = "scipy", specifier = ">=1.13.1" },
