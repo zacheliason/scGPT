@@ -261,7 +261,7 @@ def train(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     scaler: any,
-) -> None:
+) -> float:  # Return the average training loss
     """
     Train the model for one epoch with gradient accumulation.
     """
@@ -276,9 +276,6 @@ def train(
         actual_batch_size = len(batch_data.y)
         batch_data.to(device)
         x: torch.Tensor = batch_data.x  # (batch_size * n_genes, 2)
-
-        # print(f"Shape of x: {x.shape}")
-        # print(f"Values of x:\n{x}")
 
         context_manager = (
             torch.cuda.amp.autocast()
@@ -348,6 +345,9 @@ def train(
             total_mse = 0
             start_time = time.time()
 
+    # Return the average training loss for the epoch
+    return total_loss / num_batches
+
 
 def eval_perturb(
     loader: DataLoader, model: TransformerGenerator, device: torch.device
@@ -355,7 +355,6 @@ def eval_perturb(
     """
     Run model in inference mode using a given data loader
     """
-
     model.eval()
     model.to(device)
     pert_cat = []
@@ -364,6 +363,7 @@ def eval_perturb(
     pred_de = []
     truth_de = []
     results = {}
+    total_loss = 0.0
 
     for itr, batch in enumerate(loader):
         batch.to(device)
@@ -373,11 +373,14 @@ def eval_perturb(
             p = model.pred_perturb(
                 batch,
                 include_zero_gene=include_zero_gene,
-                # gene_ids=gene_ids,
             )
             t = batch.y
             pred.extend(p.cpu())
             truth.extend(t.cpu())
+
+            # Calculate validation loss
+            loss = criterion(p, t, torch.ones_like(t, dtype=torch.bool))
+            total_loss += loss.item()
 
             # Differentially expressed genes
             for itr, de_idx in enumerate(batch.de_idx):
@@ -395,6 +398,9 @@ def eval_perturb(
     truth_de = torch.stack(truth_de)
     results["pred_de"] = pred_de.detach().cpu().numpy().astype(np.float64)
     results["truth_de"] = truth_de.detach().cpu().numpy().astype(np.float64)
+
+    # Add validation loss to results
+    results["val_loss"] = total_loss / len(loader)
 
     return results
 
@@ -649,6 +655,8 @@ sest_model = None
 patience = 0
 best_model = None
 
+train_losses = []
+val_losses = []
 for epoch in range(1, epochs + 1):
     epoch_start_time = time.time()
     train_loader = pert_data.dataloader["train_loader"]
@@ -656,7 +664,8 @@ for epoch in range(1, epochs + 1):
 
     print(f"\rEpoch {epoch}/{epochs} | ", end="", flush=True)
 
-    train(
+    # Train and get training loss
+    train_loss = train(
         model=model,
         train_loader=train_loader,
         n_genes=n_genes,
@@ -665,8 +674,13 @@ for epoch in range(1, epochs + 1):
         scheduler=scheduler,
         scaler=scaler,
     )
+    train_losses.append(train_loss)  # Store training loss
 
+    # Validate and get validation loss
     val_res = eval_perturb(valid_loader, model, device)
+    val_loss = val_res["val_loss"]
+    val_losses.append(val_loss)  # Store validation loss
+
     val_metrics = compute_perturbation_metrics(
         val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
     )
@@ -707,6 +721,24 @@ for epoch in range(1, epochs + 1):
             best_model.state_dict(),
             os.path.join(data_dir, "scGPT_human", "best_model.pt"),
         )
+
+
+plt.figure(figsize=(10, 6))
+plt.plot(range(1, len(train_losses) + 1), train_losses, label="Training Loss")
+plt.plot(range(1, len(val_losses) + 1), val_losses, label="Validation Loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("Training and Validation Losses")
+plt.legend()
+plt.grid(True)
+
+# Save the plot
+loss_plot_path = os.path.join(output_dir, "loss_plot.png")
+plt.savefig(loss_plot_path)
+plt.close()
+
+print(f"Loss plot saved to {loss_plot_path}")
+
 
 """ ## Evaluations"""
 
@@ -759,3 +791,6 @@ for name, result in subgroup_analysis.items():
     for m in result.keys():
         mean_value = np.mean(subgroup_analysis[name][m])
         logger.info("test_" + name + "_" + m + ": " + str(mean_value))
+
+
+print("end")
