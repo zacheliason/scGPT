@@ -569,7 +569,7 @@ log_interval = 100
 
 
 # dataset and evaluation choices
-data_name = "adamson"
+data_name = "norman"
 split = "simulation"
 if data_name == "norman":
     perts_to_plot = ["SAMD1+ZBTB1"]
