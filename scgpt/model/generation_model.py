@@ -508,7 +508,7 @@ class TransformerGenerator(nn.Module):
         x, pert_idx = batch_data.x, batch_data.pert_idx
         # pert = batch_data.pert
 
-        actual_batch_size = len(batch_data.y)
+        actual_batch_size = len(batch_data.x)
         ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
         pert_flags = torch.zeros_like(ori_gene_values)
 
