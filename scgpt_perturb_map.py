@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import copy
 import gc
 import json
 import os
@@ -568,7 +569,7 @@ log_interval = 100
 
 
 # dataset and evaluation choices
-data_name = "norman"
+data_name = "adamson"
 split = "simulation"
 if data_name == "norman":
     perts_to_plot = ["SAMD1+ZBTB1"]
@@ -681,6 +682,7 @@ for epoch in range(1, epochs + 1):
     val_metrics = compute_perturbation_metrics(
         val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
     )
+
     val_res["pred"] = torch.from_numpy(val_res["pred"])
     val_res["truth"] = torch.from_numpy(val_res["truth"])
 
@@ -689,7 +691,7 @@ for epoch in range(1, epochs + 1):
 
     # Compute the loss
     loss = loss_mse = criterion(val_res["pred"], val_res["truth"], masked_positions)
-    val_losses.append(loss)
+    val_losses.append(loss)  # Assuming val_metrics contains a "loss" key
 
     print(
         f"Val Pearson: {val_metrics['pearson']:5.4f} | Time: {time.time() - epoch_start_time:5.2f}s",
