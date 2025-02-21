@@ -681,11 +681,14 @@ for epoch in range(1, epochs + 1):
     val_metrics = compute_perturbation_metrics(
         val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
     )
-    masked_positions = torch.ones_like(
-        torch.from_numpy(val_res["truth"]), dtype=torch.bool
-    )
-    loss = loss_mse = criterion(val_res["pred"], val_res["truth"], masked_positions)
+    val_res["pred"] = torch.from_numpy(val_res["pred"])
+    val_res["truth"] = torch.from_numpy(val_res["truth"])
 
+    # Create the mask
+    masked_positions = torch.ones_like(val_res["truth"], dtype=torch.bool)
+
+    # Compute the loss
+    loss = loss_mse = criterion(val_res["pred"], val_res["truth"], masked_positions)
     val_losses.append(loss)
 
     print(
