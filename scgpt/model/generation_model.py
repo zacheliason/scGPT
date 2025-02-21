@@ -515,12 +515,18 @@ class TransformerGenerator(nn.Module):
 
         return index_map
 
-    def process_batch(self, batch_data, sample=True):
+    def process_batch(self, batch_data, sample=True, predict=False):
+        # if "pert_idx" not in batch_data:
+        #     pert_idx = batcH_data.edge_stores["pert_idx"]
+
         x, pert_idx = batch_data.x, batch_data.pert_idx
         # pert = batch_data.pert
 
-        actual_batch_size = len(batch_data.y)
-        ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
+        actual_batch_size = len(batch_data.x)
+        if predict:
+            ori_gene_values = x[:, 0].view(actual_batch_size, 1)
+        else:
+            ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
         pert_flags = torch.zeros_like(ori_gene_values)
 
         for batch_idx, ps in enumerate(pert_idx):
@@ -606,6 +612,7 @@ class TransformerGenerator(nn.Module):
         ECS: bool = False,
         do_sample: bool = False,
         sample_batch: bool = True,
+        predict: bool = False,
     ) -> Mapping[str, Tensor]:
         """
         Args:
@@ -634,7 +641,7 @@ class TransformerGenerator(nn.Module):
             src_key_padding_mask,
             input_gene_ids,
             pert_idx,
-        ) = self.process_batch(batch_data, sample=sample_batch)
+        ) = self.process_batch(batch_data, sample=sample_batch, predict=predict)
 
         if self.explicit_zero_prob and not do_sample and not self.training:
             do_sample = True
@@ -737,6 +744,7 @@ class TransformerGenerator(nn.Module):
         include_zero_gene="batch-wise",
         # gene_ids=None,
         amp=True,
+        predict=False,
     ) -> Tensor:
         """
         Args:
@@ -765,6 +773,7 @@ class TransformerGenerator(nn.Module):
                     ECS=False,
                     do_sample=True,
                     sample_batch=False,
+                    predict=predict,
                 )
             output_values = output_dict["mlm_output"].float()
             input_gene_ids = output_dict["input_gene_ids"]

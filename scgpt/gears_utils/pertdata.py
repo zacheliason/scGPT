@@ -575,13 +575,15 @@ class PertData:
         feature_mat = torch.Tensor(X).T
         if pert_idx is None:
             pert_idx = [-1]
-        return Data(
+        data = Data(
             x=feature_mat,
             pert_idx=pert_idx,
             y=torch.Tensor(y),
             de_idx=de_idx,
             pert=pert,
         )
+
+        return data
 
     def create_cell_graph_dataset(self, split_adata, pert_category, num_samples=1):
         """
@@ -650,11 +652,11 @@ class PertData:
         # Create cell graphs
         cell_graphs = []
         for X, y in zip(Xs, ys):
-            cell_graphs.append(
-                self.create_cell_graph(
-                    X.toarray(), y.toarray(), de_idx, pert_category, pert_idx
-                )
+            cell_graph = self.create_cell_graph(
+                X.toarray(), y.toarray(), de_idx, pert_category, pert_idx
             )
+
+            cell_graphs.append(cell_graph)
 
         return cell_graphs
 
