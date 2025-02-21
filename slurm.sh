@@ -23,6 +23,8 @@ else
     # Set up working directory
     echo "Directory $WD does not exist. Initiating setup."
     mkdir -p $WD
+
+    echo "Created working directory $WD"
     cd $WD
     #cp $HOME_DIR/pyproject.toml $WD/pyproject.toml
     #cp $HOME_DIR/scgpt_perturb.py $WD/scgpt_perturb.py
