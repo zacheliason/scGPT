@@ -2,18 +2,18 @@ import functools
 import json
 import logging
 import os
-from pathlib import Path
 import random
 import subprocess
+from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
-import torch
 import pandas as pd
+import torch
 from anndata import AnnData
-from matplotlib import pyplot as plt
-from matplotlib import axes
 from IPython import get_ipython
+from matplotlib import axes
+from matplotlib import pyplot as plt
 
 from .. import logger
 
@@ -74,9 +74,7 @@ def isnotebook() -> bool:
 
 def get_free_gpu():
     import subprocess
-    import sys
     from io import StringIO
-    import pandas as pd
 
     gpu_stats = subprocess.check_output(
         [
@@ -290,7 +288,7 @@ def map_raw_id_to_vocab_id(
         return_pt = False
         dtype = raw_ids.dtype
     else:
-        raise ValueError(f"raw_ids must be either torch.Tensor or np.ndarray.")
+        raise ValueError("raw_ids must be either torch.Tensor or np.ndarray.")
 
     if raw_ids.ndim != 1:
         raise ValueError(f"raw_ids must be 1d, got {raw_ids.ndim}d.")
@@ -465,7 +463,7 @@ def compute_perturbation_metrics(
     }
 
     conditions = np.unique(results["pert_cat"])
-    assert not "ctrl" in conditions, "ctrl should not be in test conditions"
+    assert "ctrl" not in conditions, "ctrl should not be in test conditions"
     condition2idx = {c: np.where(results["pert_cat"] == c)[0] for c in conditions}
 
     mean_ctrl = np.array(ctrl_adata.X.mean(0)).flatten()  # (n_genes,)
