@@ -281,9 +281,7 @@ def train(
     optimizer.zero_grad()  # Zero gradients at the start
 
     for batch, batch_data in enumerate(train_loader):
-        actual_batch_size = len(batch_data.y)
         batch_data.to(device)
-        x: torch.Tensor = batch_data.x  # (batch_size * n_genes, 2)
 
         context_manager = (
             torch.cuda.amp.autocast()
