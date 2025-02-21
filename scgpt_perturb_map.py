@@ -681,7 +681,10 @@ for epoch in range(1, epochs + 1):
     val_metrics = compute_perturbation_metrics(
         val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
     )
-    val_losses.append(val_metrics["loss"])  # Assuming val_metrics contains a "loss" key
+    masked_positions = torch.ones_like(val_res["truth"], dtype=torch.bool)
+    loss = loss_mse = criterion(val_res["pred"], val_res["truth"], masked_positions)
+
+    val_losses.append(loss)  # Assuming val_metrics contains a "loss" key
 
     print(
         f"Val Pearson: {val_metrics['pearson']:5.4f} | Time: {time.time() - epoch_start_time:5.2f}s",
