@@ -1,13 +1,14 @@
+import gc
 import math
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import Dict, Mapping, Optional, Tuple, Any, Union
 
-import numpy as np
 import torch
+import numpy as np
+from torch import nn, Tensor
 import torch.distributed as dist
 import torch.nn.functional as F
-from torch import Tensor, nn
-from torch.distributions import Bernoulli
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.distributions import Bernoulli
 from tqdm import trange
 
 try:
@@ -346,11 +347,6 @@ class MultiOmicTransformerModel(nn.Module):
         Returns:
             dict of output Tensors.
         """
-        print()
-        print()
-        print("multiomic transformer model!")
-        print()
-        print()
         transformer_output = self._encode(
             src, values, src_key_padding_mask, batch_labels
         )
@@ -655,7 +651,6 @@ class FlashTransformerEncoderLayer(nn.Module):
         >>> src = torch.rand(32, 10, 512)
         >>> out = encoder_layer(src)
     """
-
     __constants__ = ["batch_first"]
 
     def __init__(

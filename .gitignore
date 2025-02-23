@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+old_scgpt
 
 *.DS_Store
 data/

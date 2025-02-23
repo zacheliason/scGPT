@@ -1,188 +1,28 @@
-import contextlib
+import os
 import math
-from typing import Any, Mapping, Optional, Union
+from typing import Mapping, Optional, Tuple, Any, Union
 
 import torch
+from torch import nn, Tensor
+import torch.distributed as dist
 import torch.nn.functional as F
-from torch import Tensor, nn
-from torch.distributions import Bernoulli
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch_geometric.nn import SGConv
+from torch.distributions import Bernoulli
+from torch.utils.data import dataset
 from tqdm import trange
 
-from .. import logger
-from ..gears_utils import (
-    GeneSimNetwork,
-    get_similarity_network,
-)
-from ..utils import map_raw_id_to_vocab_id
 from .model import (
-    ContinuousValueEncoder,
     ExprDecoder,
+    MVCDecoder,
+    ContinuousValueEncoder,
     FastTransformerEncoderWrapper,
     FlashTransformerEncoderLayer,
-    MVCDecoder,
 )
-
-
-class MLP(torch.nn.Module):
-    def __init__(self, sizes, batch_norm=True, last_layer_act="linear"):
-        """
-        Multi-layer perceptron
-        :param sizes: list of sizes of the layers
-        :param batch_norm: whether to use batch normalization
-        :param last_layer_act: activation function of the last layer
-
-        """
-        super(MLP, self).__init__()
-        layers = []
-        for s in range(len(sizes) - 1):
-            layers = layers + [
-                torch.nn.Linear(sizes[s], sizes[s + 1]),
-                torch.nn.BatchNorm1d(sizes[s + 1])
-                if batch_norm and s < len(sizes) - 1
-                else None,
-                torch.nn.ReLU(),
-            ]
-
-        layers = [l for l in layers if l is not None][:-1]
-        self.activation = last_layer_act
-        self.network = torch.nn.Sequential(*layers)
-        self.relu = torch.nn.ReLU()
-
-    def forward(self, x):
-        return self.network(x)
+from ..utils import map_raw_id_to_vocab_id
+from .. import logger
 
 
 class TransformerGenerator(nn.Module):
-    def model_initialize(
-        self,
-        hidden_size=64,
-        num_go_gnn_layers=1,
-        num_gene_gnn_layers=1,
-        decoder_hidden_size=16,
-        num_similar_genes_go_graph=20,
-        num_similar_genes_co_express_graph=20,
-        coexpress_threshold=0.4,
-        uncertainty=False,
-        uncertainty_reg=1,
-        direction_lambda=1e-1,
-        G_go=None,
-        G_go_weight=None,
-        G_coexpress=None,
-        G_coexpress_weight=None,
-        no_perturb=False,
-        **kwargs,
-    ):
-        """
-        Initialize the model
-
-        Parameters
-        ----------
-        hidden_size: int
-            hidden dimension, default 64
-        num_go_gnn_layers: int
-            number of GNN layers for GO graph, default 1
-        num_gene_gnn_layers: int
-            number of GNN layers for co-expression gene graph, default 1
-        decoder_hidden_size: int
-            hidden dimension for gene-specific decoder, default 16
-        num_similar_genes_go_graph: int
-            number of maximum similar K genes in the GO graph, default 20
-        num_similar_genes_co_express_graph: int
-            number of maximum similar K genes in the co expression graph, default 20
-        coexpress_threshold: float
-            pearson correlation threshold when constructing coexpression graph, default 0.4
-        uncertainty: bool
-            whether or not to turn on uncertainty mode, default False
-        uncertainty_reg: float
-            regularization term to balance uncertainty loss and prediction loss, default 1
-        direction_lambda: float
-            regularization term to balance direction loss and prediction loss, default 1
-        G_go: scipy.sparse.csr_matrix
-            GO graph, default None
-        G_go_weight: scipy.sparse.csr_matrix
-            GO graph edge weights, default None
-        G_coexpress: scipy.sparse.csr_matrix
-            co-expression graph, default None
-        G_coexpress_weight: scipy.sparse.csr_matrix
-            co-expression graph edge weights, default None
-        no_perturb: bool
-            predict no perturbation condition, default False
-
-        Returns
-        -------
-        None
-        """
-
-        self.config = {
-            "hidden_size": hidden_size,
-            "num_go_gnn_layers": num_go_gnn_layers,
-            "num_gene_gnn_layers": num_gene_gnn_layers,
-            "decoder_hidden_size": decoder_hidden_size,
-            "num_similar_genes_go_graph": num_similar_genes_go_graph,
-            "num_similar_genes_co_express_graph": num_similar_genes_co_express_graph,
-            "coexpress_threshold": coexpress_threshold,
-            "uncertainty": uncertainty,
-            "uncertainty_reg": uncertainty_reg,
-            "direction_lambda": direction_lambda,
-            "G_go": G_go,
-            "G_go_weight": G_go_weight,
-            "G_coexpress": G_coexpress,
-            "G_coexpress_weight": G_coexpress_weight,
-            "device": self.device,
-            "num_genes": self.num_genes,
-            "num_perts": self.num_perts,
-            "no_perturb": no_perturb,
-        }
-
-        # if self.wandb:
-        #     self.wandb.config.update(self.config)
-
-        if self.config["G_coexpress"] is None:
-            ## calculating co expression similarity graph
-            edge_list = get_similarity_network(
-                network_type="co-express",
-                adata=self.adata,
-                threshold=coexpress_threshold,
-                k=num_similar_genes_co_express_graph,
-                data_path=self.data_path,
-                data_name=self.dataset_name,
-                split=self.split,
-                seed=self.seed,
-                train_gene_set_size=self.train_gene_set_size,
-                set2conditions=self.set2conditions,
-            )
-
-            sim_network = GeneSimNetwork(
-                edge_list, self.gene_list, node_map=self.node_map
-            )
-            self.G_coexpress = sim_network.edge_index
-            self.G_coexpress_weight = sim_network.edge_weight
-
-        if self.config["G_go"] is None:
-            ## calculating gene ontology similarity graph
-            edge_list = get_similarity_network(
-                network_type="go",
-                adata=self.adata,
-                threshold=coexpress_threshold,
-                k=num_similar_genes_go_graph,
-                pert_list=self.pert_list,
-                data_path=self.data_path,
-                data_name=self.dataset_name,
-                split=self.split,
-                seed=self.seed,
-                train_gene_set_size=self.train_gene_set_size,
-                set2conditions=self.set2conditions,
-                default_pert_graph=self.default_pert_graph,
-            )
-
-            sim_network = GeneSimNetwork(
-                edge_list, self.pert_list, node_map=self.node_map_pert
-            )
-            self.G_go = sim_network.edge_index
-            self.G_go_weight = sim_network.edge_weight
-
     def __init__(
         self,
         ntoken: int,
@@ -193,8 +33,6 @@ class TransformerGenerator(nn.Module):
         nlayers_cls: int,
         n_cls: int,
         vocab: Any,
-        pert_data: Any,
-        seq_len: int = 1536,
         dropout: float = 0.5,
         pad_token: str = "<pad>",
         pad_value: int = 0,
@@ -211,21 +49,6 @@ class TransformerGenerator(nn.Module):
         use_fast_transformer: bool = False,
         fast_transformer_backend: str = "flash",
         pre_norm: bool = False,
-        # GEARS stuff
-        device: Optional[torch.device] = None,
-        hidden_size: int = 64,
-        num_go_gnn_layers: int = 1,
-        num_gene_gnn_layers: int = 1,
-        decoder_hidden_size: int = 16,
-        num_similar_genes_go_graph: int = 20,
-        num_similar_genes_co_express_graph: int = 20,
-        include_zero_gene: str = "all",
-        max_seq_len: int = 1536,
-        gene_ids: Any = None,
-        # G_go: Optional[torch.Tensor] = None,
-        # G_go_weight: Optional[torch.Tensor] = None,
-        # G_coexpress: Optional[torch.Tensor] = None,
-        # G_coexpress_weight: Optional[torch.Tensor] = None,
     ):
         super().__init__()
         self.model_type = "Transformer"
@@ -298,66 +121,6 @@ class TransformerGenerator(nn.Module):
                 explicit_zero_prob=explicit_zero_prob,
             )
 
-        self.dataloader = pert_data.dataloader
-        self.adata = pert_data.adata
-        self.node_map = pert_data.node_map
-        self.node_map_pert = pert_data.node_map_pert
-        self.data_path = pert_data.data_path
-        self.dataset_name = pert_data.dataset_name
-        self.split = pert_data.split
-        self.seed = pert_data.seed
-        self.train_gene_set_size = pert_data.train_gene_set_size
-        self.set2conditions = pert_data.set2conditions
-        self.subgroup = pert_data.subgroup
-        self.gene_list = pert_data.gene_names.values.tolist()
-        self.pert_list = pert_data.pert_names.tolist()
-        self.num_genes = len(self.gene_list)
-        self.num_perts = len(self.pert_list)
-        self.default_pert_graph = pert_data.default_pert_graph
-        self.pert_emb = nn.Embedding(self.num_perts, hidden_size, max_norm=True)
-
-        self.device = (
-            device
-            if device is not None
-            else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
-
-        self.model_initialize()
-
-        hidden_size = self.config["hidden_size"]
-        self.gene_ids = gene_ids
-
-        self.index_map = self._create_pert_index_map(
-            pert_data.pert_names.tolist(), pert_data.gene_names.values.tolist()
-        )
-
-        self.max_seq_len = max_seq_len
-        self.include_zero_gene = include_zero_gene
-
-        ### perturbation gene ontology GNN
-        self.G_sim = self.G_go.to(device)
-        self.G_sim_weight = self.G_go_weight.to(device)
-
-        self.sim_layers = torch.nn.ModuleList()
-
-        self.num_layers = num_go_gnn_layers
-        for i in range(1, self.num_layers + 1):
-            self.sim_layers.append(SGConv(hidden_size, hidden_size, 1))
-
-        # self.pert_fuse = MLP(
-        #     [hidden_size, hidden_size, hidden_size], last_layer_act="ReLU"
-        # )
-
-        self.seq_length = seq_len
-        self.d_model = d_model
-        self.pert_fuse = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, self.seq_length * self.d_model),
-        )
-
         self.init_weights()
 
     def init_weights(self) -> None:
@@ -368,19 +131,13 @@ class TransformerGenerator(nn.Module):
         self,
         src: Tensor,
         values: Tensor,
-        pert_idx,
+        input_pert_flags,
         src_key_padding_mask: Tensor,
     ) -> Tensor:
         src = self.encoder(src)  # (batch, seq_len, embsize)
         self.cur_gene_token_embs = src
         values = self.value_encoder(values)  # (batch, seq_len, embsize)
-        input_pert_flags = pert_idx
         perts = self.pert_encoder(input_pert_flags)  # (batch, seq_len, embsize)
-        # pert_embedding = self.perturb_encode(pert_idx=pert_idx)
-        # print(f"Pert Embedding Shape: {perts.shape}")
-        # print(f"Source Shape: {src.shape}")
-        # print(f"Values Shape: {values.shape}")
-        # total_embs = src + values + pert_embedding
         total_embs = src + values + perts
 
         # total_embs = self.bn(total_embs.permute(0, 2, 1)).permute(0, 2, 1)
@@ -415,186 +172,17 @@ class TransformerGenerator(nn.Module):
 
         return cell_emb
 
-    def perturb_encode(self, pert_idx):
-        pert_index = []
-        for idx, i in enumerate(pert_idx):
-            for j in i:
-                if j != -1:
-                    pert_index.append([idx, j])
-        pert_index = torch.tensor(pert_index).T
-
-        pert_global_emb = self.pert_emb(
-            torch.LongTensor(list(range(self.num_perts))).to(self.device)
-        )
-
-        ## augment global perturbation embedding with GNN
-        for idx, layer in enumerate(self.sim_layers):
-            pert_global_emb = layer(pert_global_emb, self.G_sim, self.G_sim_weight)
-            if idx < self.num_layers - 1:
-                pert_global_emb = pert_global_emb.relu()
-
-        if pert_index.shape[0] != 0:
-            ### in case all samples in the batch are controls, then there is no indexing for pert_index.
-            pert_track = {}
-            for i, j in enumerate(pert_index[0]):
-                if j.item() in pert_track:
-                    pert_track[j.item()] = (
-                        pert_track[j.item()] + pert_global_emb[pert_index[1][i]]
-                    )
-                else:
-                    pert_track[j.item()] = pert_global_emb[pert_index[1][i]]
-
-            if len(list(pert_track.values())) > 0:
-                # sample_row = list(pert_track.values())[0]
-
-                # for i in range(max(pert_track.keys()) + 1):
-                #     if i not in pert_track:
-                #         pert_track[i] = torch.zeros_like(sample_row)
-
-                if len(list(pert_track.values())) == 1:
-                    # circumvent when batch size = 1 with single perturbation and cannot feed into MLP
-                    emb_total = self.pert_fuse(
-                        torch.stack(list(pert_track.values()) * 2)
-                    )
-                else:
-                    emb_total = self.pert_fuse(torch.stack(list(pert_track.values())))
-
-                emb_total = emb_total.view(-1, self.seq_length, self.d_model)
-
-        pert_track_index_to_emb_index = {k: i for i, k in enumerate(pert_track.keys())}
-
-        batch_size = len(pert_idx)
-        new_tensor = torch.zeros(
-            (batch_size, self.seq_length, self.d_model), device=emb_total.device
-        )
-
-        for batch_idx in range(batch_size):
-            if batch_idx in pert_track:
-                new_tensor[batch_idx] = emb_total[
-                    pert_track_index_to_emb_index[batch_idx]
-                ]
-
-        return new_tensor
-
-    def _create_pert_index_map(self, pert_names, gene_names):
-        """
-        Creates a mapping from indices in pert_names to matching indices in gene_names.
-        Caches results to avoid recomputation.
-
-        Parameters:
-        pert_names (np.ndarray): Array of gene names to map from
-        gene_names (list): List of gene names to map to
-        cache_file (str): Path to save/load the index mapping
-
-        Returns:
-        dict: Mapping of indices {pert_index: gene_names_index}
-        """
-
-        # Create new mapping
-        index_map = {}
-
-        # Convert gene_names to dictionary for O(1) lookup
-        gene_to_idx = {gene: idx for idx, gene in enumerate(gene_names)}
-
-        # Create mapping
-        for idx, pert in enumerate(pert_names):
-            if pert in gene_to_idx:
-                # Store the mapping using string keys (JSON requirement)
-                index_map[str(idx)] = str(gene_to_idx[pert])
-
-        return index_map
-
-    def process_batch(self, batch_data, sample=True):
-        x, pert_idx = batch_data.x, batch_data.pert_idx
-        # pert = batch_data.pert
-
-        actual_batch_size = len(batch_data.x)
-        ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
-        pert_flags = torch.zeros_like(ori_gene_values)
-
-        for batch_idx, ps in enumerate(pert_idx):
-            for p in ps:
-                if str(p) in self.index_map:
-                    gene_idx = int(self.index_map[str(p)])
-                    pert_flags[batch_idx, gene_idx] = torch.tensor(
-                        1, dtype=torch.int64, device=pert_flags.device
-                    )
-
-                if str(p) not in self.index_map and p != -1:
-                    print(f"Missing perturbation {p} in index_map")
-
-        # pert_flags = x[:, 1].long().view(actual_batch_size, n_genes)
-        target_gene_values = batch_data.y  # (batch_size, n_genes)
-
-        if self.include_zero_gene in ["all", "batch-wise"]:
-            if self.include_zero_gene == "all":
-                input_gene_ids = torch.arange(
-                    self.num_genes, device=self.device, dtype=torch.long
-                )
-            else:
-                input_gene_ids = (
-                    ori_gene_values.nonzero()[:, 1].flatten().unique().sort()[0]
-                )
-            # # sample input_gene_id
-            # if len(input_gene_ids) > max_seq_len:
-            #     input_gene_ids = torch.randperm(len(input_gene_ids), device=device)[
-            #         :max_seq_len
-            #     ]
-
-            if sample:
-                # Get indices of perturbed genes (where pert_flags != 0)
-                perturbed_gene_mask = (pert_flags != 0).any(dim=0)  # Shape: (n_genes,)
-                perturbed_gene_ids = torch.where(perturbed_gene_mask)[0]
-
-                # Get indices of non-perturbed genes
-                non_perturbed_gene_ids = torch.where(~perturbed_gene_mask)[0]
-
-                # Prioritize perturbed genes in truncation
-                if len(perturbed_gene_ids) >= self.max_seq_len:
-                    # Case 1: More perturbed genes than `max_seq_len` → truncate perturbed genes
-                    input_gene_ids = perturbed_gene_ids[: self.max_seq_len]
-                else:
-                    # Case 2: Include all perturbed genes + sample non-perturbed genes
-                    num_non_perturbed = self.max_seq_len - len(perturbed_gene_ids)
-                    non_perturbed_sampled = non_perturbed_gene_ids[
-                        torch.randperm(len(non_perturbed_gene_ids))[:num_non_perturbed]
-                    ]
-                    input_gene_ids = torch.cat(
-                        [perturbed_gene_ids, non_perturbed_sampled]
-                    )
-
-            input_values = ori_gene_values[:, input_gene_ids]
-            input_pert_flags = pert_flags[:, input_gene_ids].to(
-                device=self.device, dtype=torch.long
-            )
-            target_values = target_gene_values[:, input_gene_ids]
-
-            src = map_raw_id_to_vocab_id(input_gene_ids, self.gene_ids)
-            src = src.repeat(actual_batch_size, 1)
-
-            src_key_padding_mask = torch.zeros_like(
-                input_values, dtype=torch.bool, device=self.device
-            )
-
-            return (
-                src,
-                input_values,
-                input_pert_flags,
-                target_values,
-                src_key_padding_mask,
-                input_gene_ids,
-                pert_idx,
-            )
-
     def forward(
         self,
-        batch_data,
+        src: Tensor,
+        values: Tensor,
+        input_pert_flags: Tensor,
+        src_key_padding_mask: Tensor,
         CLS: bool = False,
         CCE: bool = False,
         MVC: bool = False,
         ECS: bool = False,
         do_sample: bool = False,
-        sample_batch: bool = True,
     ) -> Mapping[str, Tensor]:
         """
         Args:
@@ -614,17 +202,6 @@ class TransformerGenerator(nn.Module):
         Returns:
             dict of output Tensors.
         """
-
-        (
-            src,
-            input_values,
-            input_pert_flags,
-            target_values,
-            src_key_padding_mask,
-            input_gene_ids,
-            pert_idx,
-        ) = self.process_batch(batch_data, sample=sample_batch)
-
         if self.explicit_zero_prob and not do_sample and not self.training:
             do_sample = True
             logger.warning("Auto set do_sample to True when model is in eval mode.")
@@ -634,21 +211,16 @@ class TransformerGenerator(nn.Module):
             from ..preprocess import binning
 
             processed_values = torch.stack(
-                [binning(row, n_bins=self.n_input_bins) for row in input_values], dim=0
-            ).to(input_values.device)
+                [binning(row, n_bins=self.n_input_bins) for row in values], dim=0
+            ).to(values.device)
         else:
-            processed_values = input_values
-
-        # transformer_output = self._encode(
-        #     src, processed_values, pert_idx, src_key_padding_mask
-        # )
+            processed_values = values
 
         transformer_output = self._encode(
             src, processed_values, input_pert_flags, src_key_padding_mask
         )
-
         output = {}
-        mlm_output = self.decoder(transformer_output, input_values)
+        mlm_output = self.decoder(transformer_output, values)
         if self.explicit_zero_prob and do_sample:
             bernoulli = Bernoulli(probs=mlm_output["zero_probs"])
             output["mlm_output"] = bernoulli.sample() * mlm_output["pred"]
@@ -657,7 +229,7 @@ class TransformerGenerator(nn.Module):
         if self.explicit_zero_prob:
             output["mlm_zero_probs"] = mlm_output["zero_probs"]
 
-        cell_emb = self._get_cell_emb_from_layer(transformer_output, input_values)
+        cell_emb = self._get_cell_emb_from_layer(transformer_output, values)
         if CLS:
             output["cls_output"] = self.cls_decoder(cell_emb)  # (batch, n_cls)
         if MVC:
@@ -687,9 +259,6 @@ class TransformerGenerator(nn.Module):
 
             output["loss_ecs"] = torch.mean(1 - (cos_sim - self.ecs_threshold) ** 2)
 
-        output["target_values"] = target_values
-        output["input_gene_ids"] = input_gene_ids
-
         return output
 
     def encode_batch(
@@ -712,7 +281,6 @@ class TransformerGenerator(nn.Module):
         outputs = []
         N = src.size(0)
         device = next(self.parameters()).device
-        print("MAYDAY ZACH")
         for i in trange(0, N, batch_size):
             output = self._encode(
                 src[i : i + batch_size].to(device),
@@ -728,7 +296,7 @@ class TransformerGenerator(nn.Module):
         self,
         batch_data,
         include_zero_gene="batch-wise",
-        # gene_ids=None,
+        gene_ids=None,
         amp=True,
     ) -> Tensor:
         """
@@ -741,29 +309,42 @@ class TransformerGenerator(nn.Module):
         self.eval()
         device = next(self.parameters()).device
         batch_data.to(device)
+        batch_size = len(batch_data.pert)
+        x: torch.Tensor = batch_data.x
+        ori_gene_values = x[:, 0].view(batch_size, -1)  # (batch_size, n_genes)
+        pert_flags = x[:, 1].long().view(batch_size, -1)
 
-        if self.include_zero_gene in ["all", "batch-wise"]:
-            context_manager = (
-                torch.cuda.amp.autocast(enabled=amp)
-                if torch.cuda.is_available()
-                else contextlib.nullcontext()
+        if include_zero_gene in ["all", "batch-wise"]:
+            assert gene_ids is not None
+            if include_zero_gene == "all":
+                input_gene_ids = torch.arange(ori_gene_values.size(1), device=device)
+            else:  # batch-wise
+                input_gene_ids = (
+                    ori_gene_values.nonzero()[:, 1].flatten().unique().sort()[0]
+                )
+            input_values = ori_gene_values[:, input_gene_ids]
+            input_pert_flags = pert_flags[:, input_gene_ids]
+
+            mapped_input_gene_ids = map_raw_id_to_vocab_id(input_gene_ids, gene_ids)
+            mapped_input_gene_ids = mapped_input_gene_ids.repeat(batch_size, 1)
+
+            src_key_padding_mask = torch.zeros_like(
+                input_values, dtype=torch.bool, device=device
             )
-
-            with context_manager:
+            with torch.cuda.amp.autocast(enabled=amp):
                 output_dict = self(
-                    batch_data,
+                    mapped_input_gene_ids,
+                    input_values,
+                    input_pert_flags,
+                    src_key_padding_mask=src_key_padding_mask,
                     CLS=False,
                     CCE=False,
                     MVC=False,
                     ECS=False,
                     do_sample=True,
-                    sample_batch=False,
                 )
             output_values = output_dict["mlm_output"].float()
-            input_gene_ids = output_dict["input_gene_ids"]
-            pred_gene_values = torch.zeros_like(
-                batch_data.x[:, 0].view(len(batch_data.pert), -1)
-            )
+            pred_gene_values = torch.zeros_like(ori_gene_values)
             pred_gene_values[:, input_gene_ids] = output_values
         return pred_gene_values
 
