@@ -281,7 +281,9 @@ def train(
     optimizer.zero_grad()  # Zero gradients at the start
 
     for batch, batch_data in enumerate(train_loader):
+        actual_batch_size = len(batch_data.y)
         batch_data.to(device)
+        x: torch.Tensor = batch_data.x  # (batch_size * n_genes, 2)
 
         context_manager = (
             torch.cuda.amp.autocast()
@@ -451,10 +453,16 @@ def predict(
             loader = DataLoader(cell_graphs, batch_size=eval_batch_size, shuffle=False)
             preds = []
             for batch_data in loader:
+                if isinstance(batch_data.pert_idx, list):
+                    batch_data.pert_idx = torch.stack(batch_data.pert_idx).view(-1, 2)
+                else:
+                    batch_data.pert_idx = batch_data.pert_idx.view(-1, 2)
+
                 pred_gene_values = model.pred_perturb(
                     batch_data,
                     include_zero_gene,
                     amp=amp,  # gene_ids=gene_ids,
+                    predict=True,
                 )
                 preds.append(pred_gene_values)
             preds = torch.cat(preds, dim=0)
@@ -568,6 +576,7 @@ log_interval = 100
 
 # dataset and evaluation choices
 data_name = "norman"
+data_name = "diabetes"
 split = "simulation"
 if data_name == "norman":
     perts_to_plot = ["SAMD1+ZBTB1"]
@@ -736,8 +745,6 @@ plt.grid(True)
 loss_plot_path = os.path.join(output_dir, "loss_plot.png")
 plt.savefig(loss_plot_path)
 plt.close()
-
-logger.info(f"Loss plot saved to {loss_plot_path}")
 
 """ ## Evaluations"""
 

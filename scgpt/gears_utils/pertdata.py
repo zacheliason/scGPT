@@ -175,6 +175,14 @@ class PertData:
             adata_path = os.path.join(data_path, "perturb_processed.h5ad")
             self.adata = sc.read_h5ad(adata_path)
 
+        elif os.path.exists(self.data_path):
+            adata_path = os.path.join(
+                self.data_path, data_name, "perturb_processed.h5ad"
+            )
+            self.adata = sc.read_h5ad(adata_path)
+            self.dataset_name = data_name
+            self.dataset_path = os.path.join(self.data_path, data_name)
+
         elif os.path.exists(data_path):
             adata_path = os.path.join(data_path, "perturb_processed.h5ad")
             self.adata = sc.read_h5ad(adata_path)
