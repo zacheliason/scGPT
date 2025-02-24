@@ -454,6 +454,9 @@ def predict(
             preds = []
             for batch_data in loader:
                 if isinstance(batch_data.pert_idx, list):
+                    batch_data.pert_idx = torch.tensor(
+                        batch_data.pert_idx, dtype=torch.int
+                    )
                     batch_data.pert_idx = torch.stack(batch_data.pert_idx).view(-1, 2)
                 else:
                     batch_data.pert_idx = batch_data.pert_idx.view(-1, 2)
@@ -576,6 +579,7 @@ log_interval = 100
 
 # dataset and evaluation choices
 data_name = "norman"
+# data_name = "diabetes"
 split = "simulation"
 if data_name == "norman":
     perts_to_plot = ["SAMD1+ZBTB1"]

@@ -529,6 +529,11 @@ class TransformerGenerator(nn.Module):
             ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
         pert_flags = torch.zeros_like(ori_gene_values)
 
+        if len(pert_idx) % actual_batch_size == 0:
+            pert_idx = pert_idx.view(actual_batch_size, -1)
+        else:
+            print("PERT ERROR")
+
         for batch_idx, ps in enumerate(pert_idx):
             for p in ps:
                 if str(p) in self.index_map:

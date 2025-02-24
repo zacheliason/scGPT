@@ -175,6 +175,15 @@ class PertData:
             adata_path = os.path.join(data_path, "perturb_processed.h5ad")
             self.adata = sc.read_h5ad(adata_path)
 
+        elif os.path.exists(self.data_path):
+            data_path = self.data_path
+            adata_path = os.path.join(
+                self.data_path, data_name, "perturb_processed.h5ad"
+            )
+            self.adata = sc.read_h5ad(adata_path)
+            self.dataset_name = data_name
+            self.dataset_path = os.path.join(self.data_path, data_name)
+
         elif os.path.exists(data_path):
             adata_path = os.path.join(data_path, "perturb_processed.h5ad")
             self.adata = sc.read_h5ad(adata_path)
@@ -548,7 +557,7 @@ class PertData:
 
         return pert_idx
 
-    def create_cell_graph(self, X, y, de_idx, pert, pert_idx=None):
+    def create_cell_graph(self, X, y, de_idx, pert, pert_idx):
         """
         Create a cell graph from a given cell
 
@@ -573,19 +582,18 @@ class PertData:
         """
 
         feature_mat = torch.Tensor(X).T
-        if pert_idx is None:
-            pert_idx = [-1]
         data = Data(
             x=feature_mat,
-            pert_idx=pert_idx,
+            pert_idx=torch.tensor(pert_idx),
             y=torch.Tensor(y),
             de_idx=de_idx,
             pert=pert,
         )
-
         return data
 
-    def create_cell_graph_dataset(self, split_adata, pert_category, num_samples=1):
+    def create_cell_graph_dataset(
+        self, split_adata, pert_category, num_samples=1, max_pert=0
+    ):
         """
         Combine cell graphs to create a dataset of cell graphs
 
@@ -617,12 +625,17 @@ class PertData:
         Xs = []
         ys = []
 
+        # Handle perturbation indices with padding
+        if pert_category != "ctrl":
+            pert_idx = self.get_pert_idx(pert_category)
+            # Pad with -1 to max_pert
+            pert_idx = pert_idx + [-1] * (max_pert - len(pert_idx))
+        else:
+            # For ctrl, use all -1s
+            pert_idx = [-1] * max_pert
+
         # When considering a non-control perturbation
         if pert_category != "ctrl":
-            # Get the indices of applied perturbation
-            pert_idx = self.get_pert_idx(pert_category)
-
-            # Store list of genes that are most differentially expressed for testing
             pert_de_category = adata_.obs["condition_name"][0]
             if de:
                 de_idx = np.where(
@@ -633,39 +646,42 @@ class PertData:
             else:
                 de_idx = [-1] * num_de_genes
             for cell_z in adata_.X:
-                # Use samples from control as basal expression
                 ctrl_samples = self.ctrl_adata[
                     np.random.randint(0, len(self.ctrl_adata), num_samples), :
                 ]
                 for c in ctrl_samples.X:
                     Xs.append(c)
                     ys.append(cell_z)
-
-        # When considering a control perturbation
         else:
-            pert_idx = None
             de_idx = [-1] * num_de_genes
             for cell_z in adata_.X:
                 Xs.append(cell_z)
                 ys.append(cell_z)
 
-        # Create cell graphs
+        # Create cell graphs with padded pert_idx
         cell_graphs = []
         for X, y in zip(Xs, ys):
             cell_graph = self.create_cell_graph(
                 X.toarray(), y.toarray(), de_idx, pert_category, pert_idx
             )
-
             cell_graphs.append(cell_graph)
-
         return cell_graphs
 
     def create_dataset_file(self):
-        """
-        Create dataset file for each perturbation condition
-        """
         print_sys("Creating dataset file...")
         self.dataset_processed = {}
-        for p in tqdm(self.adata.obs["condition"].unique()):
-            self.dataset_processed[p] = self.create_cell_graph_dataset(self.adata, p)
+        pert_categories = self.adata.obs["condition"].unique()
+
+        # Compute max number of perturbations
+        max_pert = 0
+        for p in pert_categories:
+            if p != "ctrl":
+                perts = p.split("+")
+                max_pert = max(max_pert, len(perts))
+
+        for p in tqdm(pert_categories):
+            # Pass max_pert to create_cell_graph_dataset
+            self.dataset_processed[p] = self.create_cell_graph_dataset(
+                self.adata, p, max_pert=max_pert
+            )
         print_sys("Done!")
