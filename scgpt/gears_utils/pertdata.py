@@ -557,7 +557,7 @@ class PertData:
 
         return pert_idx
 
-    def create_cell_graph(self, X, y, de_idx, pert, pert_idx):
+    def create_cell_graph(self, X, y, de_idx, pert, pert_idx, pert_names):
         """
         Create a cell graph from a given cell
 
@@ -573,12 +573,13 @@ class PertData:
             Perturbation category
         pert_idx: list
             List of perturbation indices
+        pert_names: list
+            List of perturbation names
 
         Returns
         -------
         torch_geometric.data.Data
             Cell graph to be used in dataloader
-
         """
 
         feature_mat = torch.Tensor(X).T
@@ -588,6 +589,7 @@ class PertData:
             y=torch.Tensor(y),
             de_idx=de_idx,
             pert=pert,
+            pert_names=pert_names,  # Store perturbation names
         )
         return data
 
@@ -611,7 +613,6 @@ class PertData:
         -------
         list
             List of cell graphs
-
         """
 
         num_de_genes = 20
@@ -628,11 +629,16 @@ class PertData:
         # Handle perturbation indices with padding
         if pert_category != "ctrl":
             pert_idx = self.get_pert_idx(pert_category)
+            pert_names = pert_category.split("+")  # Extract perturbation names
             # Pad with -1 to max_pert
             pert_idx = pert_idx + [-1] * (max_pert - len(pert_idx))
+            pert_names = pert_names + ["None"] * (
+                max_pert - len(pert_names)
+            )  # Pad names
         else:
             # For ctrl, use all -1s
             pert_idx = [-1] * max_pert
+            pert_names = ["None"] * max_pert  # Pad names
 
         # When considering a non-control perturbation
         if pert_category != "ctrl":
@@ -658,11 +664,11 @@ class PertData:
                 Xs.append(cell_z)
                 ys.append(cell_z)
 
-        # Create cell graphs with padded pert_idx
+        # Create cell graphs with padded pert_idx and pert_names
         cell_graphs = []
         for X, y in zip(Xs, ys):
             cell_graph = self.create_cell_graph(
-                X.toarray(), y.toarray(), de_idx, pert_category, pert_idx
+                X.toarray(), y.toarray(), de_idx, pert_category, pert_idx, pert_names
             )
             cell_graphs.append(cell_graph)
         return cell_graphs

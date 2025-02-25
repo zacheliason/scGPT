@@ -538,7 +538,15 @@ class TransformerGenerator(nn.Module):
 
         for batch_idx, ps in enumerate(pert_idx):
             for p in ps:
-                gene_idx = int(p)
+                if p == -1:
+                    continue
+
+                gene_idx = int(self.index_map[str(int(p))])
+                pert_name = self.gene_list[gene_idx]
+                what = self.gene_ids[gene_idx]
+                if p > -1:
+                    if pert_name not in batch_data.pert_names[batch_idx]:
+                        print()
                 pert_flags[batch_idx, gene_idx] = torch.tensor(
                     1, dtype=torch.int64, device=pert_flags.device
                 )
