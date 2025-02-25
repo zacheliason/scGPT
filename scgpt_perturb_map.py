@@ -456,7 +456,7 @@ def predict(
                     batch_data.pert_idx = torch.tensor(
                         batch_data.pert_idx, dtype=torch.int
                     )
-                    batch_data.pert_idx = torch.stack(batch_data.pert_idx).view(-1, 2)
+                    # batch_data.pert_idx = torch.stack(batch_data.pert_idx).view(-1, 2)
                 else:
                     batch_data.pert_idx = batch_data.pert_idx.view(-1, 2)
 
