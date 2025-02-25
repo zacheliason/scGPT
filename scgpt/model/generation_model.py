@@ -523,10 +523,12 @@ class TransformerGenerator(nn.Module):
         # pert = batch_data.pert
 
         actual_batch_size = batch_data.batch_size
-        if predict:
-            ori_gene_values = x[:, 0].view(actual_batch_size, 1)
-        else:
+        # if predict:
+        if x.size(0) % self.num_genes == 0:
             ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
+        else:
+            ori_gene_values = x[:, 0].view(actual_batch_size, 1)
+
         pert_flags = torch.zeros_like(ori_gene_values)
 
         if len(pert_idx) % actual_batch_size == 0:
@@ -536,14 +538,19 @@ class TransformerGenerator(nn.Module):
 
         for batch_idx, ps in enumerate(pert_idx):
             for p in ps:
-                if str(p) in self.index_map:
-                    gene_idx = int(self.index_map[str(p)])
-                    pert_flags[batch_idx, gene_idx] = torch.tensor(
-                        1, dtype=torch.int64, device=pert_flags.device
-                    )
+                gene_idx = int(p)
+                pert_flags[batch_idx, gene_idx] = torch.tensor(
+                    1, dtype=torch.int64, device=pert_flags.device
+                )
 
-                if str(p) not in self.index_map and p != -1:
-                    print(f"Missing perturbation {p} in index_map")
+            # if str(p) in self.index_map:
+            #     gene_idx = int(self.index_map[str(p)])
+            #     pert_flags[batch_idx, gene_idx] = torch.tensor(
+            #         1, dtype=torch.int64, device=pert_flags.device
+            #     )
+
+            # if str(p) not in self.index_map and p != -1:
+            #     print(f"Missing perturbation {p} in index_map")
 
         # pert_flags = x[:, 1].long().view(actual_batch_size, n_genes)
         target_gene_values = batch_data.y  # (batch_size, n_genes)
@@ -589,7 +596,9 @@ class TransformerGenerator(nn.Module):
             input_pert_flags = pert_flags[:, input_gene_ids].to(
                 device=self.device, dtype=torch.long
             )
-            target_values = target_gene_values[:, input_gene_ids]
+            target_values = (
+                target_gene_values[:, input_gene_ids] if not predict else None
+            )
 
             src = map_raw_id_to_vocab_id(input_gene_ids, self.gene_ids)
             src = src.repeat(actual_batch_size, 1)
