@@ -34,6 +34,7 @@ from torchtext._torchtext import (
 from torchtext.vocab import Vocab
 
 import scgpt as scg
+import wandb
 from scgpt.gears_utils import PertData
 from scgpt.loss import (
     masked_mse_loss,
@@ -605,7 +606,7 @@ lr = 1e-4  # or 1e-4
 batch_size = 32
 eval_batch_size = 32
 accumulation_steps = 2
-epochs = 1  # 15
+epochs = 15
 schedule_interval = 1
 early_stop = 10
 
@@ -619,6 +620,23 @@ default_model_settings = {
     "dropout": 0,  # dropout probability
     "use_fast_transformer": True,  # whether to use fast transformer
 }
+
+use_wandb = True
+wandb_mode = "online"  # or "offline" if you don't want to sync with the Wandb server
+
+if use_wandb:
+    run = wandb.init(
+        config=default_model_settings,  # or any other config you want to log
+        project="scGPT",  # your Wandb project name
+        reinit=True,
+        settings=wandb.Settings(start_method="fork"),
+        mode=wandb_mode,
+    )
+    config = wandb.config
+else:
+    config = copy.deepcopy(default_model_settings)
+    run = None
+
 
 # logging
 log_interval = 100
@@ -755,6 +773,15 @@ for epoch in range(1, epochs + 1):
         end="\r",
         flush=True,
     )
+    if use_wandb:
+        wandb.log(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": loss,
+                "val_pearson": val_metrics["pearson"],
+            }
+        )
 
     logger.info(f"val_metrics at epoch {epoch}: ")
     logger.info(val_metrics)
@@ -802,9 +829,11 @@ if best_model is None:
     best_model = model
 
 for p in perts_to_plot:
-    plot_perturbation(
+    fig = plot_perturbation(
         best_model, p, pool_size=300, save_file=os.path.join(output_dir, f"{p}.png")
     )
+    if use_wandb:
+        wandb.log({f"{p}_plot": wandb.Image(fig)})
 
 test_loader = pert_data.dataloader["test_loader"]
 test_res = eval_perturb(test_loader, best_model, device)
@@ -850,3 +879,15 @@ for name, result in subgroup_analysis.items():
     for m in result.keys():
         mean_value = np.mean(subgroup_analysis[name][m])
         logger.info("test_" + name + "_" + m + ": " + str(mean_value))
+
+if use_wandb:
+    wandb.log(
+        {
+            "test_pearson": test_metrics["pearson"],
+            "test_pearson_delta": deeper_res["pearson_delta"],
+            "test_pearson_delta_de": deeper_res["pearson_delta_de"],
+        }
+    )
+
+if use_wandb:
+    wandb.finish()
