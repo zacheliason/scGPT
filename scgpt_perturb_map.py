@@ -1,6 +1,7 @@
 import argparse
 import contextlib
-import copy
+
+# import copy
 import gc
 import json
 import os
@@ -14,6 +15,7 @@ import numpy as np
 import psutil
 import seaborn as sns
 import torch
+from torch_geometric.data import Data
 
 device = torch.device("cuda" if torch.cuda.is_available() else "mps")
 if not torch.cuda.is_available():
@@ -23,7 +25,6 @@ if not torch.cuda.is_available():
     device = torch.device("cuda" if torch.cuda.is_available() else "mps")
 
 from gears.inference import deeper_analysis, non_dropout_analysis
-from gears.utils import create_cell_graph_dataset_for_prediction
 from torch import nn
 from torch_geometric.loader import DataLoader
 from torchtext._torchtext import (
@@ -58,6 +59,7 @@ def prepare_data(
     # pert_data = clear_pert_data_memory(pert_data)
 
     genes = pert_data.adata.var["gene_name"].tolist()
+    pert_names = pert_data.pert_names
     n_genes = len(genes)
     vocab = Vocab(
         VocabPybind(genes + special_tokens, None)
@@ -68,7 +70,7 @@ def prepare_data(
         [vocab[gene] if gene in vocab else vocab["<pad>"] for gene in genes], dtype=int
     )
 
-    return pert_data, vocab, gene_ids, n_genes
+    return pert_data, vocab, gene_ids, n_genes, pert_names
 
 
 def setup_model(
@@ -418,7 +420,10 @@ def enable_gradient_checkpointing(model):
 
 
 def predict(
-    model: TransformerGenerator, pert_list: List[str], pool_size: Optional[int] = None
+    model: TransformerGenerator,
+    pert_list: List[str],
+    pool_size: Optional[int] = None,
+    pert_names: Optional[List[str]] = None,
 ) -> Dict:
     """
     Predict the gene expression values for the given perturbations.
@@ -447,8 +452,17 @@ def predict(
     with torch.no_grad():
         results_pred = {}
         for pert in pert_list:
-            cell_graphs = create_cell_graph_dataset_for_prediction(
-                pert, ctrl_adata, gene_list, device, num_samples=pool_size
+            pert_indices = [list(pert_names).index(p) for p in pert]
+            # pert_indices_in_genes = [
+            #     int(model.index_map[str(index)]) for index in pert_indices
+            # ]
+            cell_graphs = _create_cell_graph_dataset_for_prediction(
+                pert_indices,
+                pert,
+                ctrl_adata,
+                gene_list,
+                device,
+                num_samples=pool_size,
             )
             loader = DataLoader(cell_graphs, batch_size=eval_batch_size, shuffle=False)
             preds = []
@@ -474,6 +488,34 @@ def predict(
     return results_pred
 
 
+def _create_cell_graph_dataset_for_prediction(
+    pert_idx, pert_gene, ctrl_adata, gene_names, device, num_samples=300
+):
+    Xs = []
+    # Get the indices (and signs) of applied perturbation
+    # pert_idx = [np.where(p == np.array(gene_names))[0][0] for p in pert_gene]
+
+    Xs = ctrl_adata[np.random.randint(0, len(ctrl_adata), num_samples), :].X.toarray()
+    # Create cell graphs
+    cell_graphs = [
+        _create_cell_graph_for_prediction(X, pert_idx, pert_gene).to(device) for X in Xs
+    ]
+    return cell_graphs
+
+
+def _create_cell_graph_for_prediction(X, pert_idx, pert_gene):
+    # If perturbations will be represented as node features
+    pert_feats = np.zeros(len(X))
+    pert_indices_in_genes = [int(model.index_map[str(index)]) for index in pert_idx]
+
+    for p in pert_indices_in_genes:
+        look = np.sign(p)
+        pert_feats[int(np.abs(p))] = np.sign(p)
+    feature_mat = torch.Tensor(np.vstack([X, pert_feats])).T
+
+    return Data(x=feature_mat, pert=pert_gene, pert_idx=pert_idx)
+
+
 def plot_perturbation(
     model: nn.Module, query: str, save_file: str = None, pool_size: int = None
 ) -> matplotlib.figure.Figure:
@@ -493,10 +535,14 @@ def plot_perturbation(
     ]
     truth = adata[adata.obs.condition == query].X.toarray()[:, de_idx]
     if query.split("+")[1] == "ctrl":
-        pred = predict(model, [[query.split("+")[0]]], pool_size=pool_size)
+        pred = predict(
+            model, [[query.split("+")[0]]], pool_size=pool_size, pert_names=pert_names
+        )
         pred = pred[query.split("+")[0]][de_idx]
     else:
-        pred = predict(model, [query.split("+")], pool_size=pool_size)
+        pred = predict(
+            model, [query.split("+")], pool_size=pool_size, pert_names=pert_names
+        )
         pred = pred["_".join(query.split("+"))][de_idx]
     ctrl_means = adata[adata.obs["condition"] == "ctrl"].to_df().mean()[de_idx].values
 
@@ -635,7 +681,7 @@ logger.info(f"Running on {time.strftime('%Y-%m-%d %H:%M:%S')}")
 # RUN
 # ---------------------------------------------------------------------------------------
 print("Running scGPT-perturbation...")
-pert_data, vocab, gene_ids, n_genes = prepare_data(
+pert_data, vocab, gene_ids, n_genes, pert_names = prepare_data(
     batch_size, eval_batch_size, data_dir, data_name, split
 )
 
@@ -676,78 +722,78 @@ for epoch in range(1, epochs + 1):
     print(f"\rEpoch {epoch}/{epochs} | ", end="", flush=True)
 
     # Train the model and get the average loss for the epoch
-    train_loss = train(
-        model=model,
-        train_loader=train_loader,
-        n_genes=n_genes,
-        criterion=criterion,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        scaler=scaler,
-    )
-    train_losses.append(train_loss)
+#     train_loss = train(
+#         model=model,
+#         train_loader=train_loader,
+#         n_genes=n_genes,
+#         criterion=criterion,
+#         optimizer=optimizer,
+#         scheduler=scheduler,
+#         scaler=scaler,
+#     )
+#     train_losses.append(train_loss)
 
-    # Evaluate on the validation set
-    val_res = eval_perturb(valid_loader, model, device)
-    val_metrics = compute_perturbation_metrics(
-        val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
-    )
+#     # Evaluate on the validation set
+#     val_res = eval_perturb(valid_loader, model, device)
+#     val_metrics = compute_perturbation_metrics(
+#         val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
+#     )
 
-    val_res["pred"] = torch.from_numpy(val_res["pred"])
-    val_res["truth"] = torch.from_numpy(val_res["truth"])
+#     val_res["pred"] = torch.from_numpy(val_res["pred"])
+#     val_res["truth"] = torch.from_numpy(val_res["truth"])
 
-    # Create the mask
-    masked_positions = torch.ones_like(val_res["truth"], dtype=torch.bool)
+#     # Create the mask
+#     masked_positions = torch.ones_like(val_res["truth"], dtype=torch.bool)
 
-    # Compute the loss
-    loss = loss_mse = criterion(val_res["pred"], val_res["truth"], masked_positions)
-    val_losses.append(loss)  # Assuming val_metrics contains a "loss" key
+#     # Compute the loss
+#     loss = loss_mse = criterion(val_res["pred"], val_res["truth"], masked_positions)
+#     val_losses.append(loss)  # Assuming val_metrics contains a "loss" key
 
-    print(
-        f"Val Pearson: {val_metrics['pearson']:5.4f} | Time: {time.time() - epoch_start_time:5.2f}s",
-        end="\r",
-        flush=True,
-    )
+#     print(
+#         f"Val Pearson: {val_metrics['pearson']:5.4f} | Time: {time.time() - epoch_start_time:5.2f}s",
+#         end="\r",
+#         flush=True,
+#     )
 
-    logger.info(f"val_metrics at epoch {epoch}: ")
-    logger.info(val_metrics)
+#     logger.info(f"val_metrics at epoch {epoch}: ")
+#     logger.info(val_metrics)
 
-    elapsed = time.time() - epoch_start_time
-    logger.info(f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | ")
+#     elapsed = time.time() - epoch_start_time
+#     logger.info(f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | ")
 
-    val_score = val_metrics["pearson"]
-    if val_score > best_val_corr:
-        best_val_corr = val_score
-        best_model = copy.deepcopy(model)
-        logger.info(f"Best model with score {val_score:5.4f}")
-        patience = 0
-    else:
-        patience += 1
-        if patience >= early_stop:
-            logger.info(f"Early stop at epoch {epoch}")
-            break
+#     val_score = val_metrics["pearson"]
+#     if val_score > best_val_corr:
+#         best_val_corr = val_score
+#         best_model = copy.deepcopy(model)
+#         logger.info(f"Best model with score {val_score:5.4f}")
+#         patience = 0
+#     else:
+#         patience += 1
+#         if patience >= early_stop:
+#             logger.info(f"Early stop at epoch {epoch}")
+#             break
 
-    torch.save(
-        model.state_dict(),
-        os.path.join(save_dir, f"model_{epoch}.pt"),
-    )
+#     torch.save(
+#         model.state_dict(),
+#         os.path.join(save_dir, f"model_{epoch}.pt"),
+#     )
 
-    scheduler.step()
+#     scheduler.step()
 
-# Plot the training and validation losses
-plt.figure(figsize=(10, 5))
-plt.plot(train_losses, label="Training Loss")
-plt.plot(val_losses, label="Validation Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("Training and Validation Loss")
-plt.legend()
-plt.grid(True)
+# # Plot the training and validation losses
+# plt.figure(figsize=(10, 5))
+# plt.plot(train_losses, label="Training Loss")
+# plt.plot(val_losses, label="Validation Loss")
+# plt.xlabel("Epoch")
+# plt.ylabel("Loss")
+# plt.title("Training and Validation Loss")
+# plt.legend()
+# plt.grid(True)
 
-# Save the plot to the output directory
-loss_plot_path = os.path.join(output_dir, "loss_plot.png")
-plt.savefig(loss_plot_path)
-plt.close()
+# # Save the plot to the output directory
+# loss_plot_path = os.path.join(output_dir, "loss_plot.png")
+# plt.savefig(loss_plot_path)
+# plt.close()
 
 """ ## Evaluations"""
 
