@@ -504,7 +504,7 @@ class TransformerGenerator(nn.Module):
 
         return index_map
 
-    def process_batch(self, batch_data, sample=True):
+    def process_batch(self, batch_data, predict=False, sample=True):
         x, pert_idx = batch_data.x, batch_data.pert_idx
         # pert = batch_data.pert
 
@@ -567,7 +567,9 @@ class TransformerGenerator(nn.Module):
             input_pert_flags = pert_flags[:, input_gene_ids].to(
                 device=self.device, dtype=torch.long
             )
-            target_values = target_gene_values[:, input_gene_ids]
+            target_values = (
+                target_gene_values[:, input_gene_ids] if not predict else None
+            )
 
             src = map_raw_id_to_vocab_id(input_gene_ids, self.gene_ids)
             src = src.repeat(actual_batch_size, 1)
@@ -595,6 +597,7 @@ class TransformerGenerator(nn.Module):
         ECS: bool = False,
         do_sample: bool = False,
         sample_batch: bool = True,
+        predict: bool = False,
     ) -> Mapping[str, Tensor]:
         """
         Args:
@@ -623,7 +626,7 @@ class TransformerGenerator(nn.Module):
             src_key_padding_mask,
             input_gene_ids,
             pert_idx,
-        ) = self.process_batch(batch_data, sample=sample_batch)
+        ) = self.process_batch(batch_data, sample=sample_batch, predict=predict)
 
         if self.explicit_zero_prob and not do_sample and not self.training:
             do_sample = True
@@ -758,6 +761,7 @@ class TransformerGenerator(nn.Module):
                     ECS=False,
                     do_sample=True,
                     sample_batch=False,
+                    predict=True,
                 )
             output_values = output_dict["mlm_output"].float()
             input_gene_ids = output_dict["input_gene_ids"]
