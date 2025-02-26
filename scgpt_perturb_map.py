@@ -1,6 +1,5 @@
 import argparse
 import contextlib
-import copy
 import gc
 import json
 import os
@@ -462,7 +461,7 @@ def predict(
                     batch_data,
                     include_zero_gene,
                     amp=amp,  # gene_ids=gene_ids,
-                    predict=True,
+                    # predict=True,
                 )
                 preds.append(pred_gene_values)
             preds = torch.cat(preds, dim=0)
@@ -576,7 +575,7 @@ log_interval = 100
 
 # dataset and evaluation choices
 data_name = "norman"
-data_name = "diabetes"
+# data_name = "diabetes"
 split = "simulation"
 if data_name == "norman":
     perts_to_plot = ["SAMD1+ZBTB1"]
@@ -665,86 +664,86 @@ best_model = None
 train_losses = []
 val_losses = []
 
-for epoch in range(1, epochs + 1):
-    epoch_start_time = time.time()
-    train_loader = pert_data.dataloader["train_loader"]
-    valid_loader = pert_data.dataloader["val_loader"]
+# for epoch in range(1, epochs + 1):
+#     epoch_start_time = time.time()
+#     train_loader = pert_data.dataloader["train_loader"]
+#     valid_loader = pert_data.dataloader["val_loader"]
 
-    print(f"\rEpoch {epoch}/{epochs} | ", end="", flush=True)
+#     print(f"\rEpoch {epoch}/{epochs} | ", end="", flush=True)
 
-    # Train the model and get the average loss for the epoch
-    train_loss = train(
-        model=model,
-        train_loader=train_loader,
-        n_genes=n_genes,
-        criterion=criterion,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        scaler=scaler,
-    )
-    train_losses.append(train_loss)
+#     # Train the model and get the average loss for the epoch
+#     train_loss = train(
+#         model=model,
+#         train_loader=train_loader,
+#         n_genes=n_genes,
+#         criterion=criterion,
+#         optimizer=optimizer,
+#         scheduler=scheduler,
+#         scaler=scaler,
+#     )
+#     train_losses.append(train_loss)
 
-    # Evaluate on the validation set
-    val_res = eval_perturb(valid_loader, model, device)
-    val_metrics = compute_perturbation_metrics(
-        val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
-    )
+#     # Evaluate on the validation set
+#     val_res = eval_perturb(valid_loader, model, device)
+#     val_metrics = compute_perturbation_metrics(
+#         val_res, pert_data.adata[pert_data.adata.obs["condition"] == "ctrl"]
+#     )
 
-    val_res["pred"] = torch.from_numpy(val_res["pred"])
-    val_res["truth"] = torch.from_numpy(val_res["truth"])
+#     val_res["pred"] = torch.from_numpy(val_res["pred"])
+#     val_res["truth"] = torch.from_numpy(val_res["truth"])
 
-    # Create the mask
-    masked_positions = torch.ones_like(val_res["truth"], dtype=torch.bool)
+#     # Create the mask
+#     masked_positions = torch.ones_like(val_res["truth"], dtype=torch.bool)
 
-    # Compute the loss
-    loss = loss_mse = criterion(val_res["pred"], val_res["truth"], masked_positions)
-    val_losses.append(loss)  # Assuming val_metrics contains a "loss" key
+#     # Compute the loss
+#     loss = loss_mse = criterion(val_res["pred"], val_res["truth"], masked_positions)
+#     val_losses.append(loss)  # Assuming val_metrics contains a "loss" key
 
-    print(
-        f"Val Pearson: {val_metrics['pearson']:5.4f} | Time: {time.time() - epoch_start_time:5.2f}s",
-        end="\r",
-        flush=True,
-    )
+#     print(
+#         f"Val Pearson: {val_metrics['pearson']:5.4f} | Time: {time.time() - epoch_start_time:5.2f}s",
+#         end="\r",
+#         flush=True,
+#     )
 
-    logger.info(f"val_metrics at epoch {epoch}: ")
-    logger.info(val_metrics)
+#     logger.info(f"val_metrics at epoch {epoch}: ")
+#     logger.info(val_metrics)
 
-    elapsed = time.time() - epoch_start_time
-    logger.info(f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | ")
+#     elapsed = time.time() - epoch_start_time
+#     logger.info(f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | ")
 
-    val_score = val_metrics["pearson"]
-    if val_score > best_val_corr:
-        best_val_corr = val_score
-        best_model = copy.deepcopy(model)
-        logger.info(f"Best model with score {val_score:5.4f}")
-        patience = 0
-    else:
-        patience += 1
-        if patience >= early_stop:
-            logger.info(f"Early stop at epoch {epoch}")
-            break
+#     val_score = val_metrics["pearson"]
+#     if val_score > best_val_corr:
+#         best_val_corr = val_score
+#         best_model = copy.deepcopy(model)
+#         logger.info(f"Best model with score {val_score:5.4f}")
+#         patience = 0
+#     else:
+#         patience += 1
+#         if patience >= early_stop:
+#             logger.info(f"Early stop at epoch {epoch}")
+#             break
 
-    torch.save(
-        model.state_dict(),
-        os.path.join(save_dir, f"model_{epoch}.pt"),
-    )
+#     torch.save(
+#         model.state_dict(),
+#         os.path.join(save_dir, f"model_{epoch}.pt"),
+#     )
 
-    scheduler.step()
+#     scheduler.step()
 
-# Plot the training and validation losses
-plt.figure(figsize=(10, 5))
-plt.plot(train_losses, label="Training Loss")
-plt.plot(val_losses, label="Validation Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("Training and Validation Loss")
-plt.legend()
-plt.grid(True)
+# # Plot the training and validation losses
+# plt.figure(figsize=(10, 5))
+# plt.plot(train_losses, label="Training Loss")
+# plt.plot(val_losses, label="Validation Loss")
+# plt.xlabel("Epoch")
+# plt.ylabel("Loss")
+# plt.title("Training and Validation Loss")
+# plt.legend()
+# plt.grid(True)
 
-# Save the plot to the output directory
-loss_plot_path = os.path.join(output_dir, "loss_plot.png")
-plt.savefig(loss_plot_path)
-plt.close()
+# # Save the plot to the output directory
+# loss_plot_path = os.path.join(output_dir, "loss_plot.png")
+# plt.savefig(loss_plot_path)
+# plt.close()
 
 """ ## Evaluations"""
 
