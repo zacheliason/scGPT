@@ -1,22 +1,28 @@
 #!/bin/bash
 
+# Replace with user's home directory 
 #SBATCH -o /CHILDRENS/home/g29755807/scgpt/runs/%j/scgpt.log
 #SBATCH -e /CHILDRENS/home/g29755807/scgpt/runs/%j/scgpt.err
-#SBATCH -p large-gpu
+#SBATCH -p med-gpu
 #SBATCH -N 1
+
+# Replace with user's scratch directory
 #SBATCH -D /scratch/ligrp/zach/scgpt
 #SBATCH -J scGPT_Test
 #SBATCH --export=None
 #SBATCH -t 4:00:00
 #SBATCH --mem=30G
 
+# Replace with user's home directory 
 HOME_DIR=/CHILDRENS/home/g29755807/scgpt
 RUN_DIR=$HOME_DIR/runs/${SLURM_JOB_ID}/
 mkdir -p $RUN_DIR
 
+# Set working directory 
 WD=/scratch/ligrp/zach/scgpt
 DATA_DIR=$WD/data
 
+# Check if working directory exists
 if [ -d "$WD" ]; then
     echo "Directory $WD exists. Aborting setup."
 else
@@ -26,8 +32,6 @@ else
 
     echo "created WD: $WD"
     cd $WD
-    #cp $HOME_DIR/pyproject.toml $WD/pyproject.toml
-    #cp $HOME_DIR/scgpt_perturb.py $WD/scgpt_perturb.py
 
     # Download scGPT via uv pip
     git clone https://github.com/zacheliason/scGPT.git $WD/scGPT
