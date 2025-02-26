@@ -38,7 +38,7 @@ else
     mv $WD/scGPT/* $WD/
     rm -rf $WD/scGPT
 
-    # Set up uv
+    # Download and set up UV (UV is a really fast Python package and project manager)
     export UV_ROOT=$WD/.uv
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH=$UV_ROOT/bin:$PATH
