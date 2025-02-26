@@ -461,7 +461,7 @@ def predict(
                     batch_data,
                     include_zero_gene,
                     amp=amp,  # gene_ids=gene_ids,
-                    # predict=True,
+                    predict=True,
                 )
                 preds.append(pred_gene_values)
             preds = torch.cat(preds, dim=0)

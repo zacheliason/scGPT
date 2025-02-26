@@ -739,6 +739,7 @@ class TransformerGenerator(nn.Module):
         include_zero_gene="batch-wise",
         # gene_ids=None,
         amp=True,
+        predict=True,
     ) -> Tensor:
         """
         Args:
