@@ -511,6 +511,7 @@ class TransformerGenerator(nn.Module):
         actual_batch_size = batch_data.batch_size
 
         if x.size(0) == self.num_genes * actual_batch_size:
+            print(f"Size of x :) {x.size(0)}")
             ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
         else:
             ori_gene_values = x[:, 0].view(actual_batch_size, 1)
