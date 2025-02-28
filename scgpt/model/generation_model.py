@@ -510,6 +510,11 @@ class TransformerGenerator(nn.Module):
 
         actual_batch_size = batch_data.batch_size
 
+        if x.dim() == 1:
+            # Add a batch dimension (unsqueeze at dim 0)
+            x = x.unsqueeze(0)
+            print("had to unsqueeze!!!!")
+
         if x.size(0) == self.num_genes * actual_batch_size:
             print(f"Size of x :) {x.size(0)}")
             ori_gene_values = x[:, 0].view(actual_batch_size, self.num_genes)
