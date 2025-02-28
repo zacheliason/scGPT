@@ -881,13 +881,23 @@ for name, result in subgroup_analysis.items():
         logger.info("test_" + name + "_" + m + ": " + str(mean_value))
 
 if use_wandb:
-    wandb.log(
-        {
-            "test_pearson": test_metrics["pearson"],
-            "test_pearson_delta": deeper_res["pearson_delta"],
-            "test_pearson_delta_de": deeper_res["pearson_delta_de"],
-        }
-    )
+    log_object = {}
+    try:
+        log_object["test_pearson"] = test_metrics["pearson"]
+    except:
+        pass
+
+    try:
+        log_object["test_pearson_delta"] = deeper_res["pearson_delta"]
+    except:
+        pass
+
+    try:
+        log_object["test_pearson_delta_de"] = deeper_res["pearson_delta_de"]
+    except:
+        pass
+
+    wandb.log(log_object)
 
 if use_wandb:
     wandb.finish()
