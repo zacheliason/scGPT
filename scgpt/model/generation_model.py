@@ -512,8 +512,10 @@ class TransformerGenerator(nn.Module):
 
         if x.dim() == 1:
             # Add a batch dimension (unsqueeze at dim 0)
-            x = x.unsqueeze(0)
             print("had to unsqueeze!!!!")
+            print(x.size())
+            x = x.unsqueeze(0)
+            print(x.size())
 
         if x.size(0) == self.num_genes * actual_batch_size:
             print(f"Size of x :) {x.size(0)}")
